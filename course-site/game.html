@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PyStart — Комната героя</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Arial, sans-serif; }
+  body {
+    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    color: #fff; line-height: 1.6; min-height: 100vh;
+  }
+
+  /* HEADER */
+  header {
+    background: rgba(0,0,0,0.3);
+    backdrop-filter: blur(10px);
+    color: white; padding: 15px 40px;
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo { font-size: 22px; font-weight: bold; }
+  .header-right { display: flex; align-items: center; gap: 15px; }
+  .coin-display {
+    background: linear-gradient(135deg, #fbbf24, #f59e0b);
+    color: #1a1a2e; padding: 8px 18px; border-radius: 50px;
+    font-weight: bold; font-size: 16px;
+    display: flex; align-items: center; gap: 8px;
+    box-shadow: 0 4px 15px rgba(251,191,36,0.4);
+    transition: transform 0.3s;
+  }
+  .coin-display.bump { animation: coinBump 0.6s ease; }
+  @keyframes coinBump {
+    0%,100% { transform: scale(1); }
+    40% { transform: scale(1.15); }
+  }
+  .nav-btn {
+    color: white; text-decoration: none;
+    background: rgba(255,255,255,0.1);
+    padding: 8px 18px; border-radius: 10px;
+    font-weight: 600; font-size: 14px;
+    border: 2px solid rgba(255,255,255,0.2);
+    transition: all 0.2s;
+  }
+  .nav-btn:hover { background: rgba(255,255,255,0.25); }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 30px 20px; }
+
+  /* ============ HERO ROOM ============ */
+  .hero-room {
+    background: linear-gradient(180deg, rgba(79,70,229,0.3), rgba(124,58,237,0.15));
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 24px; padding: 40px;
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 40px;
+    margin-bottom: 30px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero-room::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(circle at 20% 30%, rgba(251,191,36,0.15), transparent 50%);
+    pointer-events: none;
+  }
+
+  /* Персонаж */
+  .character-wrapper {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 15px; position: relative; z-index: 1;
+  }
+  .character {
+    width: 200px; height: 200px;
+    background: radial-gradient(circle at 40% 30%, #7c3aed, #4f46e5);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 110px;
+    box-shadow: 0 20px 60px rgba(124,58,237,0.5), inset 0 -20px 40px rgba(0,0,0,0.3);
+    border: 4px solid rgba(255,255,255,0.2);
+    animation: float 3s ease-in-out infinite;
+    transition: transform 0.3s;
+    position: relative;
+  }
+  .character.celebrate { animation: celebrate 0.6s ease; }
+  @keyframes float {
+    0%,100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+  @keyframes celebrate {
+    0% { transform: scale(1) rotate(0); }
+    30% { transform: scale(1.2) rotate(-10deg); }
+    60% { transform: scale(1.1) rotate(10deg); }
+    100% { transform: scale(1) rotate(0); }
+  }
+  .character-name {
+    font-size: 20px; font-weight: 700;
+    text-align: center;
+  }
+  .character-level {
+    background: linear-gradient(135deg, #fbbf24, #f59e0b);
+    color: #1a1a2e; padding: 4px 14px;
+    border-radius: 50px; font-weight: 700; font-size: 13px;
+  }
+
+  /* Инфо-панель */
+  .hero-info { position: relative; z-index: 1; }
+  .hero-info h1 {
+    font-size: 32px; margin-bottom: 8px;
+    background: linear-gradient(135deg, #fff, #c4b5fd);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-info .status {
+    color: rgba(255,255,255,0.7); margin-bottom: 20px; font-size: 15px;
+  }
+  .hero-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 15px; margin-top: 20px;
+  }
+  .hero-stat {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px; padding: 15px;
+  }
+  .hero-stat .label { font-size: 12px; color: rgba(255,255,255,0.6); text-transform: uppercase; letter-spacing: 0.5px; }
+  .hero-stat .value { font-size: 24px; font-weight: 700; color: #fbbf24; margin-top: 4px; }
+  .hero-stat .value.white { color: white; }
+
+  /* XP BAR */
+  .xp-bar-wrap {
+    margin-top: 18px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 50px; padding: 4px;
+  }
+  .xp-bar {
+    height: 14px; background: #1a1a2e;
+    border-radius: 50px; overflow: hidden;
+  }
+  .xp-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4f46e5, #7c3aed, #a855f7);
+    border-radius: 50px;
+    transition: width 0.6s ease;
+    box-shadow: 0 0 15px rgba(124,58,237,0.7);
+  }
+  .xp-label {
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: rgba(255,255,255,0.7);
+    margin-top: 6px;
+  }
+
+  /* ============ TABS ============ */
+  .tabs {
+    display: flex; gap: 8px; margin-bottom: 25px;
+    background: rgba(255,255,255,0.05); padding: 8px;
+    border-radius: 14px; width: fit-content;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .tab {
+    padding: 10px 24px; border: none; background: transparent;
+    color: rgba(255,255,255,0.6); font-size: 15px; font-weight: 600;
+    border-radius: 10px; cursor: pointer; transition: all 0.2s;
+  }
+  .tab:hover { color: white; }
+  .tab.active {
+    background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    color: white;
+    box-shadow: 0 4px 15px rgba(124,58,237,0.5);
+  }
+
+  /* ============ SHOP ============ */
+  .section-title {
+    font-size: 22px; font-weight: 700;
+    margin-bottom: 20px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .shop-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 18px;
+  }
+  .shop-item {
+    background: linear-gradient(160deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
+    border: 2px solid rgba(255,255,255,0.1);
+    border-radius: 18px; padding: 22px;
+    display: flex; flex-direction: column; gap: 12px;
+    transition: all 0.25s;
+    position: relative; overflow: hidden;
+  }
+  .shop-item::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, #fbbf24, transparent);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .shop-item:hover {
+    transform: translateY(-4px);
+    border-color: rgba(251,191,36,0.5);
+    box-shadow: 0 15px 40px rgba(251,191,36,0.15);
+  }
+  .shop-item:hover::before { opacity: 1; }
+  .shop-item.owned {
+    border-color: #10b981;
+    background: linear-gradient(160deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));
+  }
+  .shop-item.owned::before {
+    background: linear-gradient(90deg, transparent, #10b981, transparent);
+    opacity: 1;
+  }
+  .shop-item.locked { opacity: 0.5; }
+
+  .item-icon { font-size: 46px; line-height: 1; }
+  .item-name { font-weight: 700; font-size: 17px; }
+  .item-desc { font-size: 13px; color: rgba(255,255,255,0.65); flex: 1; }
+  .item-price {
+    font-weight: 700; color: #fbbf24; font-size: 18px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .buy-btn {
+    padding: 11px 20px;
+    background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    color: white; border: none; border-radius: 10px;
+    font-size: 14px; font-weight: 700; cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 4px 15px rgba(124,58,237,0.4);
+  }
+  .buy-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(124,58,237,0.6);
+  }
+  .buy-btn:disabled {
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.4);
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+  .buy-btn.owned-btn {
+    background: linear-gradient(135deg, #10b981, #059669);
+    box-shadow: 0 4px 15px rgba(16,185,129,0.4);
+    cursor: default;
+  }
+
+  /* ============ INVENTORY ============ */
+  .inv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 15px;
+  }
+  .inv-item {
+    background: rgba(255,255,255,0.05);
+    border: 2px dashed rgba(255,255,255,0.15);
+    border-radius: 14px; padding: 20px;
+    text-align: center;
+  }
+  .inv-item .icon { font-size: 40px; margin-bottom: 8px; }
+  .inv-item .name { font-size: 13px; font-weight: 600; }
+  .inv-item .count {
+    background: #fbbf24; color: #1a1a2e;
+    border-radius: 50px; padding: 2px 10px;
+    font-size: 12px; font-weight: 700;
+    display: inline-block; margin-top: 8px;
+  }
+
+  /* ============ TASKS ============ */
+  .task-progress-list {
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .task-prog {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px; padding: 14px 20px;
+    display: flex; align-items: center; gap: 15px;
+    transition: all 0.2s;
+  }
+  .task-prog.done {
+    border-color: rgba(16,185,129,0.5);
+    background: linear-gradient(90deg, rgba(16,185,129,0.15), transparent);
+  }
+  .task-prog .check {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: bold; flex-shrink: 0;
+  }
+  .task-prog.done .check {
+    background: #10b981; color: white;
+  }
+  .task-prog .info { flex: 1; }
+  .task-prog .info .title { font-weight: 600; font-size: 14px; }
+  .task-prog .info .module { font-size: 12px; color: rgba(255,255,255,0.5); }
+  .task-prog .reward {
+    color: #fbbf24; font-weight: 700; font-size: 15px;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .task-prog.done .reward { color: #10b981; }
+
+  /* EMPTY */
+  .empty {
+    text-align: center; padding: 60px 20px;
+    color: rgba(255,255,255,0.5);
+  }
+  .empty .icon { font-size: 60px; margin-bottom: 15px; }
+
+  /* TOAST */
+  .toast-container {
+    position: fixed; top: 80px; right: 20px; z-index: 999;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .toast {
+    background: #1a1a2e; color: white;
+    padding: 14px 20px; border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    font-size: 14px; font-weight: 500;
+    display: flex; align-items: center; gap: 12px;
+    animation: slideIn 0.4s ease, fadeOut 0.4s ease 2.6s forwards;
+    max-width: 320px;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .toast.success { background: linear-gradient(135deg, #10b981, #059669); }
+  .toast.coin { background: linear-gradient(135deg, #f59e0b, #d97706); color: #1a1a2e; }
+  .toast.error { background: linear-gradient(135deg, #ef4444, #dc2626); }
+  @keyframes slideIn { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes fadeOut { to { transform: translateX(120%); opacity: 0; } }
+
+  /* FLYING COIN */
+  .flying-coin {
+    position: fixed; font-size: 30px; pointer-events: none;
+    animation: flyUp 1s ease-out forwards; z-index: 1000;
+  }
+  @keyframes flyUp {
+    0% { opacity: 1; transform: translateY(0) scale(1); }
+    100% { opacity: 0; transform: translateY(-100px) scale(1.5); }
+  }
+
+  @media (max-width: 720px) {
+    .hero-room { grid-template-columns: 1fr; text-align: center; padding: 25px; }
+    .character { width: 150px; height: 150px; font-size: 80px; }
+    header { padding: 12px 18px; }
+    .logo { font-size: 18px; }
+    .hero-info h1 { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🏰 Комната героя</div>
+  <div class="header-right">
+    <a href="index.html" class="nav-btn">📘 К курсу</a>
+    <div class="coin-display" id="coinDisplay">🪙 <span id="coinCount">0</span></div>
+  </div>
+</header>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="container">
+
+  <!-- HERO ROOM -->
+  <div class="hero-room">
+    <div class="character-wrapper">
+      <div class="character" id="character">🧑‍💻</div>
+      <div class="character-name" id="characterName">Новичок</div>
+      <div class="character-level" id="characterLevel">Уровень 1</div>
+    </div>
+    <div class="hero-info">
+      <h1 id="heroTitle">Твой герой растёт!</h1>
+      <p class="status" id="heroStatus">Решай задания в курсе — зарабатывай пикоины — прокачивай героя.</p>
+
+      <div class="hero-stats">
+        <div class="hero-stat">
+          <div class="label">Монеты</div>
+          <div class="value" id="statCoins">0</div>
+        </div>
+        <div class="hero-stat">
+          <div class="label">Заданий решено</div>
+          <div class="value white" id="statSolved">0</div>
+        </div>
+        <div class="hero-stat">
+          <div class="label">Предметов</div>
+          <div class="value white" id="statItems">0</div>
+        </div>
+        <div class="hero-stat">
+          <div class="label">Всего заработано</div>
+          <div class="value" id="statTotal">0</div>
+        </div>
+      </div>
+
+      <div class="xp-bar-wrap">
+        <div class="xp-bar"><div class="xp-fill" id="xpFill" style="width:0%"></div></div>
+        <div class="xp-label">
+          <span>Прогресс уровня</span>
+          <span id="xpText">0 / 100 XP</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <button class="tab active" data-tab="shop">🛒 Магазин</button>
+    <button class="tab" data-tab="inventory">🎒 Инвентарь</button>
+    <button class="tab" data-tab="progress">📊 Прогресс</button>
+  </div>
+
+  <!-- SHOP -->
+  <div id="tab-shop">
+    <h2 class="section-title">🛒 Магазин наград</h2>
+    <div class="shop-grid" id="shopGrid"></div>
+  </div>
+
+  <!-- INVENTORY -->
+  <div id="tab-inventory" style="display:none;">
+    <h2 class="section-title">🎒 Твой инвентарь</h2>
+    <div class="inv-grid" id="invGrid"></div>
+    <div class="empty" id="invEmpty" style="display:none;">
+      <div class="icon">📦</div>
+      <p>Пока пусто. Купи что-нибудь в магазине!</p>
+    </div>
+  </div>
+
+  <!-- PROGRESS -->
+  <div id="tab-progress" style="display:none;">
+    <h2 class="section-title">📊 Прогресс по заданиям</h2>
+    <div class="task-progress-list" id="taskProgList"></div>
+  </div>
+
+</div>
+
+<script src="course-data.js"></script>
+<script>
+/* ============================================================
+   💾 СОСТОЯНИЕ ИГРЫ (общее с index.html через localStorage)
+============================================================ */
+const KEY = 'pystart_game_v1';
+
+function defaultState() {
+  return {
+    coins: 0,
+    totalEarned: 0,
+    solved: [],
+    answers: {},
+    inventory: {},
+    avatar: '🧑‍💻',
+    characterName: 'Новичок',
+    purchasedCount: 0
+  };
+}
+
+function loadState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+    return { ...defaultState(), ...saved };
+  } catch { return defaultState(); }
+}
+
+let state = loadState();
+
+function saveState() {
+  localStorage.setItem(KEY, JSON.stringify(state));
+}
+
+/* ============================================================
+   🛒 МАГАЗИН
+============================================================ */
+const SHOP_ITEMS = [
+  // Аватары
+  { id: 'av_robot', icon: '🤖', name: 'Аватар «Робот»', desc: 'Технологичный образ.', price: 40, type: 'avatar', avatar: '🤖', unique: true },
+  { id: 'av_wizard', icon: '🧙', name: 'Аватар «Маг»', desc: 'Повелитель кода.', price: 70, type: 'avatar', avatar: '🧙', unique: true },
+  { id: 'av_ninja', icon: '🥷', name: 'Аватар «Ниндзя»', desc: 'Быстрый и незаметный.', price: 90, type: 'avatar', avatar: '🥷', unique: true },
+  { id: 'av_dragon', icon: '🐉', name: 'Аватар «Дракон»', desc: 'Легендарный уровень.', price: 150, type: 'avatar', avatar: '🐉', unique: true },
+
+  // Титулы
+  { id: 'title_junior', icon: '🌱', name: 'Титул «Джуниор»', desc: 'Первый шаг сделан.', price: 30, type: 'title', title: 'Джуниор', unique: true },
+  { id: 'title_master', icon: '⚔️', name: 'Титул «Мастер кода»', desc: 'Для тех, кто в теме.', price: 100, type: 'title', title: 'Мастер кода', unique: true },
+  { id: 'title_legend', icon: '👑', name: 'Титул «Легенда»', desc: 'Максимальный статус.', price: 200, type: 'title', title: 'Легенда', unique: true },
+
+  // Расходники
+  { id: 'hint', icon: '💡', name: 'Подсказка', desc: 'Открывает подсказку к заданию.', price: 15, type: 'consumable', unique: false },
+  { id: 'potion', icon: '🧪', name: 'Зелье удачи', desc: 'Просто красиво смотрится в инвентаре.', price: 25, type: 'consumable', unique: false },
+  { id: 'gem', icon: '💎', name: 'Кристалл', desc: 'Редкий коллекционный предмет.', price: 60, type: 'consumable', unique: false },
+  { id: 'crown', icon: '👑', name: 'Корона', desc: 'Украшение для настоящих лидеров.', price: 120, type: 'consumable', unique: false },
+
+  // Улучшения
+  { id: 'double', icon: '✨', name: 'Двойные монеты', desc: 'Удваивает все награды на 1 час.', price: 80, type: 'boost', unique: false },
+  { id: 'skip', icon: '⏭️', name: 'Пропуск задания', desc: 'Засчитывает задание без решения.', price: 50, type: 'boost', unique: false },
+  { id: 'rename', icon: '✏️', name: 'Сменить имя героя', desc: 'Дай герою новое имя.', price: 35, type: 'boost', unique: false }
+];
+
+/* ============================================================
+   🎯 УРОВНИ ГЕРОЯ
+============================================================ */
+const LEVELS = [
+  { xp: 0,    title: 'Новичок' },
+  { xp: 50,   title: 'Ученик' },
+  { xp: 150,  title: 'Практикант' },
+  { xp: 300,  title: 'Кодер' },
+  { xp: 500,  title: 'Разработчик' },
+  { xp: 800,  title: 'Инженер' },
+  { xp: 1200, title: 'Мастер' },
+  { xp: 2000, title: 'Легенда' }
+];
+
+function getLevelInfo(earned) {
+  let current = LEVELS[0];
+  let next = LEVELS[1];
+  for (let i = 0; i < LEVELS.length; i++) {
+    if (earned >= LEVELS[i].xp) {
+      current = LEVELS[i];
+      next = LEVELS[i + 1] || null;
+    }
+  }
+  const levelNumber = LEVELS.indexOf(current) + 1;
+  const currentXp = earned - current.xp;
+  const needXp = next ? next.xp - current.xp : 0;
+  const percent = next ? Math.min(100, Math.round((currentXp / needXp) * 100)) : 100;
+  return { current, next, levelNumber, currentXp, needXp, percent };
+}
+
+/* ============================================================
+   🎨 РЕНДЕР
+============================================================ */
+function render() {
+  const totalTasks = window.COURSE_DATA?.tasks?.length || 15;
+  const solvedCount = state.solved.length;
+  const itemsCount = Object.values(state.inventory).reduce((s, n) => s + n, 0);
+
+  // Header
+  document.getElementById('coinCount').textContent = state.coins;
+
+  // Character
+  document.getElementById('character').textContent = state.avatar;
+  const lvl = getLevelInfo(state.totalEarned);
+  document.getElementById('characterName').textContent = state.characterName;
+  document.getElementById('characterLevel').textContent = `Уровень ${lvl.levelNumber} · ${lvl.current.title}`;
+
+  // Hero stats
+  document.getElementById('statCoins').textContent = state.coins;
+  document.getElementById('statSolved').textContent = `${solvedCount} / ${totalTasks}`;
+  document.getElementById('statItems').textContent = itemsCount;
+  document.getElementById('statTotal').textContent = state.totalEarned;
+
+  // XP
+  document.getElementById('xpFill').style.width = lvl.percent + '%';
+  document.getElementById('xpText').textContent = lvl.next
+    ? `${lvl.currentXp} / ${lvl.needXp} XP`
+    : 'Максимальный уровень!';
+
+  // Status message
+  const statusEl = document.getElementById('heroStatus');
+  if (solvedCount === 0) {
+    statusEl.textContent = 'Начни с первого задания в курсе — и получи первые монеты!';
+  } else if (solvedCount < totalTasks) {
+    statusEl.textContent = `Решено ${solvedCount} из ${totalTasks}. Осталось совсем немного!`;
+  } else {
+    statusEl.textContent = '🎉 Ты прошёл весь курс! Настоящий герой!';
+  }
+
+  renderShop();
+  renderInventory();
+  renderProgress();
+}
+
+/* ============================================================
+   🛒 МАГАЗИН
+============================================================ */
+function renderShop() {
+  const grid = document.getElementById('shopGrid');
+  grid.innerHTML = SHOP_ITEMS.map(item => {
+    const owned = item.unique && state.inventory[item.id];
+    const canBuy = state.coins >= item.price;
+
+    let btnText = `Купить · ${item.price} 🪙`;
+    let btnClass = 'buy-btn';
+    let disabled = '';
+
+    if (owned) {
+      btnText = '✓ Куплено';
+      btnClass += ' owned-btn';
+      disabled = 'disabled';
+    } else if (!canBuy) {
+      btnText = `Не хватает ${item.price - state.coins} 🪙`;
+      disabled = 'disabled';
+    }
+
+    return `
+      <div class="shop-item ${owned ? 'owned' : ''}">
+        <div class="item-icon">${item.icon}</div>
+        <div class="item-name">${item.name}</div>
+        <div class="item-desc">${item.desc}</div>
+        <div class="item-price">🪙 ${item.price}</div>
+        <button class="${btnClass}" ${disabled} onclick="buyItem('${item.id}')">${btnText}</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function buyItem(id) {
+  const item = SHOP_ITEMS.find(i => i.id === id);
+  if (!item) return;
+
+  if (state.coins < item.price) {
+    toast('❌ Недостаточно монет', 'error');
+    return;
+  }
+
+  // Проверка на уникальность
+  if (item.unique && state.inventory[id]) {
+    toast('❌ Уже куплено', 'error');
+    return;
+  }
+
+  // Списываем монеты
+  state.coins -= item.price;
+
+  // Применяем эффект
+  if (item.type === 'avatar') {
+    state.avatar = item.avatar;
+    toast(`✅ Новый аватар: ${item.name}`, 'success');
+  } else if (item.type === 'title') {
+    state.characterName = item.title;
+    toast(`✅ Новый титул: ${item.title}`, 'success');
+  } else if (item.type === 'boost') {
+    if (id === 'rename') {
+      const newName = prompt('Как назвать героя?', state.characterName);
+      if (newName && newName.trim()) {
+        state.characterName = newName.trim().slice(0, 20);
+        toast(`✅ Имя изменено на "${state.characterName}"`, 'success');
+      }
+    } else if (id === 'double') {
+      state.doubleUntil = Date.now() + 3600 * 1000;
+      toast('✨ Двойные монеты активны 1 час!', 'success');
+    } else if (id === 'skip') {
+      const firstUnsolved = (window.COURSE_DATA?.tasks || []).find(t => !state.solved.includes(t.id));
+      if (firstUnsolved) {
+        state.solved.push(firstUnsolved.id);
+        toast(`⏭️ Пропущено: "${firstUnsolved.title}"`, 'success');
+      } else {
+        toast('✅ Все задания уже решены!', 'success');
+      }
+    }
+  } else {
+    toast(`✅ Куплено: ${item.name}`, 'success');
+  }
+
+  // Добавляем в инвентарь
+  state.inventory[id] = (state.inventory[id] || 0) + 1;
+  state.purchasedCount = (state.purchasedCount || 0) + 1;
+
+  saveState();
+  render();
+
+  // Анимация персонажа
+  const ch = document.getElementById('character');
+  ch.classList.add('celebrate');
+  setTimeout(() => ch.classList.remove('celebrate'), 600);
+}
+
+/* ============================================================
+   🎒 ИНВЕНТАРЬ
+============================================================ */
+function renderInventory() {
+  const grid = document.getElementById('invGrid');
+  const empty = document.getElementById('invEmpty');
+  const entries = Object.entries(state.inventory).filter(([, count]) => count > 0);
+
+  if (entries.length === 0) {
+    grid.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  grid.innerHTML = entries.map(([id, count]) => {
+    const item = SHOP_ITEMS.find(i => i.id === id);
+    if (!item) return '';
+    return `
+      <div class="inv-item">
+        <div class="icon">${item.icon}</div>
+        <div class="name">${item.name}</div>
+        ${count > 1 ? `<div class="count">× ${count}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+/* ============================================================
+   📊 ПРОГРЕСС ПО ЗАДАНИЯМ
+============================================================ */
+function renderProgress() {
+  const list = document.getElementById('taskProgList');
+  const tasks = window.COURSE_DATA?.tasks || [];
+
+  if (tasks.length === 0) {
+    list.innerHTML = '<div class="empty"><div class="icon">📭</div><p>Нет заданий</p></div>';
+    return;
+  }
+
+  list.innerHTML = tasks.map(t => {
+    const done = state.solved.includes(t.id);
+    return `
+      <div class="task-prog ${done ? 'done' : ''}">
+        <div class="check">${done ? '✓' : t.id}</div>
+        <div class="info">
+          <div class="title">${t.title}</div>
+          <div class="module">${t.module}</div>
+        </div>
+        <div class="reward">${done ? '✓' : '+' + (t.reward || 10)} 🪙</div>
+      </div>
+    `;
+  }).join('');
+}
+
+/* ============================================================
+   🍞 TOAST + 🪙 FLYING COIN
+============================================================ */
+function toast(msg, type = '') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+/* ============================================================
+   📑 TABS
+============================================================ */
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    ['shop', 'inventory', 'progress'].forEach(name => {
+      document.getElementById('tab-' + name).style.display =
+        name === tab.dataset.tab ? 'block' : 'none';
+    });
+  });
+});
+
+/* ============================================================
+   🚀 СТАРТ
+============================================================ */
+render();
+
+// Слушаем изменения в localStorage (если открыто в другой вкладке)
+window.addEventListener('storage', () => {
+  state = loadState();
+  render();
+});
+
+// Обновляем каждые 5 сек — на случай, если пользователь
+// решал задания в другой вкладке
+setInterval(() => {
+  const fresh = loadState();
+  if (JSON.stringify(fresh) !== JSON.stringify(state)) {
+    state = fresh;
+    render();
+  }
+}, 5000);
+</script>
+
+<script src="achievka.js"></script>
+</body>
+</html>

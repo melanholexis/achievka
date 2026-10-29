@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ачивка</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <div class="avatar" id="avatar">А</div>
+      <nav class="nav" id="nav">
+        <button class="nav-btn active" type="button" data-view="home">
+          <svg viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg>
+          Путь
+        </button>
+        <button class="nav-btn" type="button" data-view="marks">
+          <svg viewBox="0 0 24 24"><path d="M5 19V5h3v14zm5 0V9h3v10zm5 0V7h3v12z"/></svg>
+          Знаки
+        </button>
+        <button class="nav-btn" type="button" data-view="rewards">
+          <svg viewBox="0 0 24 24"><path d="M12 3 9 9H3l5 4-2 7 6-4 6 4-2-7 5-4h-6z"/></svg>
+          Награды
+        </button>
+        <button class="nav-btn" type="button" data-view="steps">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16v3H4zm0 5h10v3H4zm0 5h16v3H4z"/></svg>
+          Шаги
+        </button>
+        <button class="nav-btn" type="button" data-view="link">
+          <svg viewBox="0 0 24 24"><path d="M12 3a5 5 0 0 1 5 5c0 3-2 5-3 7H10c-1-2-3-4-3-7a5 5 0 0 1 5-5zm-2 14h4v2h-4z"/></svg>
+          Связь
+        </button>
+        <button class="nav-btn" type="button" data-view="courses">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+          Курсы
+        </button>
+      </nav>
+      <button class="nav-btn side-end" type="button" data-view="link">
+        <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm-7 2.2 1.5-1.5 1.4 1.4A6 6 0 0 1 18.1 10l1.4-1.4L21 10.2A8 8 0 0 0 5 10.2zM12 15a7 7 0 0 0-6.3 4h12.6A7 7 0 0 0 12 15z"/></svg>
+        Ещё
+      </button>
+    </aside>
+
+    <div class="workspace">
+      <header class="top">
+        <div class="hello-block">
+          <h1 id="hello">Привет</h1>
+          <p class="muted" id="course-name"></p>
+        </div>
+        <label class="search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+          <input id="search" type="search" placeholder="Поиск" autocomplete="off">
+        </label>
+        <button class="theme-toggle" id="theme" type="button" aria-pressed="false">
+          <span>
+            <b>Тема</b>
+            <small id="theme-label">Светлая</small>
+          </span>
+          <span class="switch" id="theme-switch"><i></i></span>
+        </button>
+        <button class="menu-btn" id="menu" type="button" aria-label="Меню">
+          <span></span><span></span><span></span>
+        </button>
+        <div class="menu" id="menu-panel" hidden>
+          <div id="menu-courses"></div>
+          <a href="/course/" target="_blank" rel="noopener">Открыть курс</a>
+          <button type="button" id="manage-courses">Все курсы</button>
+          <button type="button" id="rescan">Сканировать сайт</button>
+          <button type="button" id="reset">Сбросить мой прогресс</button>
+          <button type="button" id="logout">Сменить аккаунт</button>
+        </div>
+      </header>
+
+      <section class="view" id="view-home"></section>
+      <section class="view" id="view-marks" hidden></section>
+      <section class="view" id="view-rewards" hidden></section>
+      <section class="view" id="view-steps" hidden></section>
+      <section class="view" id="view-link" hidden></section>
+      <section class="view" id="view-courses" hidden></section>
+    </div>
+  </div>
+  <div class="gate" id="gate">
+    <form class="gate-card" id="gate-form">
+      <div class="xp-mark" aria-hidden="true">XP</div>
+      <h2>Вход</h2>
+      <p class="muted">На этом компьютере имя можно выбрать из списка. На новом компьютере впиши имя и свой ключ.</p>
+      <label>Имя<input id="gate-name" name="name" autocomplete="name" required></label>
+      <label>Ключ<input id="gate-token" name="token" autocomplete="off" placeholder="ach_… если входишь с другого компьютера"></label>
+      <label class="remember"><input id="gate-remember" type="checkbox" checked> Запомнить на этом компьютере</label>
+      <p class="gate-error" id="gate-error" hidden></p>
+      <button type="submit">Войти</button>
+      <div class="gate-saved" id="gate-saved"></div>
+    </form>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
