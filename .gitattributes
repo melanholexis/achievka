@@ -1,0 +1,2 @@
+# Keep CRLF in the Git blobs so GitHub source ZIPs work with Windows cmd.exe.
+*.bat -text
