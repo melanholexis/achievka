@@ -17,7 +17,7 @@ public final class CourseScanner {
     public static final String COURSE_URL = "https://blerebo.github.io/course-data.js";
 
     private static final Pattern FIELD_STRING = Pattern.compile("['\"]?%s['\"]?\\s*:\\s*(?:'([^']*)'|\"([^\"]*)\")");
-    private static final Pattern FIELD_INT = Pattern.compile("['\"]?%s['\"]?\\s*:\\s*(\\d+)");
+    private static final Pattern FIELD_INT = Pattern.compile("['\"]?%s['\"]?\\s*:\\s*(-?\\d+)");
     private static final Pattern SCRIPT_SRC = Pattern.compile("(?i)<script[^>]+src\\s*=\\s*['\"]([^'\"]+)['\"]");
     private static final Pattern HTML_TITLE = Pattern.compile("(?is)<title[^>]*>(.*?)</title>");
     private static final Pattern LIST_ITEM = Pattern.compile("(?is)<li([^>]*)>(.*?)</li>");
@@ -33,20 +33,21 @@ public final class CourseScanner {
     public ScanResult scanUrl(String url, boolean allowFallback, String fallbackJs) throws ScanException {
         String address = normalize(url);
         try {
-            return interpret(address, fetch(address));
+            var response = fetch(address);
+            return interpret(response.uri().toString(), response.body());
         } catch (ScanException e) {
             if (!allowFallback) {
                 throw e;
             }
             Course course = fromFallback(fallbackJs, e.getMessage());
-            return new ScanResult(course, COURSE_URL, "https://blerebo.github.io/", "pystart_game_v1", List.of());
+            return new ScanResult(course, COURSE_URL, CourseBook.PYTHON.siteUrl(), "pystart_game_v1", List.of(), fallbackJs);
         } catch (Exception e) {
             String reason = e.getMessage() == null ? "нет связи с сайтом" : e.getMessage();
             if (!allowFallback) {
                 throw new ScanException("Сайт недоступен (" + reason + ")");
             }
             Course course = fromFallback(fallbackJs, reason);
-            return new ScanResult(course, COURSE_URL, "https://blerebo.github.io/", "pystart_game_v1", List.of());
+            return new ScanResult(course, COURSE_URL, CourseBook.PYTHON.siteUrl(), "pystart_game_v1", List.of(), fallbackJs);
         }
     }
 
@@ -56,29 +57,36 @@ public final class CourseScanner {
 
     private ScanResult interpret(String url, String body) throws ScanException, IOException, InterruptedException {
         if (looksLikeCourse(body)) {
-            return result(parse(body, true, "Считано с " + url), url, siteOf(url), storageKey(body, url), List.of());
+            return result(parse(body, true, "Считано с " + url), url, URI.create(url).resolve(".").toString(),
+                storageKey(body, url), List.of(), body);
         }
         if (looksLikeHtml(body)) {
             String linked = scriptWithCourse(body);
             if (linked != null) {
                 String next = URI.create(url).resolve(linked).toString();
-                String script = fetch(next);
+                var response = fetch(next);
+                String script = response.body();
                 if (looksLikeCourse(script)) {
-                    return result(parse(script, true, "Считано с " + next), next, siteOf(url), storageKey(script, url), List.of());
+                    String source = response.uri().toString();
+                    return result(parse(script, true, "Считано с " + source), source, url,
+                        storageKey(body + "\n" + script, url), List.of(), script);
                 }
             }
             String inline = inlineCourse(body);
             if (inline != null) {
-                return result(parse(inline, true, "Считано со страницы " + url), url, siteOf(url), storageKey(body, url), List.of());
+                return result(parse(inline, true, "Считано со страницы " + url), url, url, storageKey(body, url), List.of(), inline);
             }
             URI page = URI.create(url);
             if (page.getPath() == null || !page.getPath().endsWith("/course-data.js")) {
-                String guess = page.resolve("/course-data.js").toString();
+                String guess = page.resolve("course-data.js").toString();
                 if (!guess.equals(url)) {
                     try {
-                        String script = fetch(guess);
+                        var response = fetch(guess);
+                        String script = response.body();
                         if (looksLikeCourse(script)) {
-                            return result(parse(script, true, "Считано с " + guess), guess, siteOf(url), storageKey(script, url), List.of());
+                            String source = response.uri().toString();
+                            return result(parse(script, true, "Считано с " + source), source, url,
+                                storageKey(body + "\n" + script, url), List.of(), script);
                         }
                     } catch (Exception ignored) {
                         // Страница без файла курса читается дальше как список шагов.
@@ -90,8 +98,8 @@ public final class CourseScanner {
         throw new ScanException("По этому адресу нет ни файла курса, ни списка шагов");
     }
 
-    private String fetch(String url) throws IOException, InterruptedException, ScanException {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+    private HttpResponse<String> fetch(String url) throws IOException, InterruptedException, ScanException {
+        HttpRequest request = HttpRequest.newBuilder(CourseBook.webUri(url))
             .timeout(Duration.ofSeconds(12))
             .header("User-Agent", "Achievka/1.0")
             .GET()
@@ -100,7 +108,7 @@ public final class CourseScanner {
         if (response.statusCode() != 200 || response.body() == null || response.body().isBlank()) {
             throw new ScanException("Сайт ответил кодом " + response.statusCode());
         }
-        return response.body();
+        return response;
     }
 
     private Course fromFallback(String fallbackJs, String reason) throws ScanException {
@@ -114,11 +122,12 @@ public final class CourseScanner {
         String title = fieldString(js, "title");
         String version = fieldString(js, "version");
         String updated = fieldString(js, "updated");
-        int tasksAt = js.indexOf("tasks:");
-        if (tasksAt < 0) {
+        Matcher taskList = Pattern.compile("(?:\\btasks|[\"']tasks[\"'])\\s*:\\s*\\[").matcher(js);
+        if (!taskList.find()) {
             throw new ScanException("В данных курса нет списка tasks");
         }
-        String body = js.substring(tasksAt);
+        String body = js.substring(taskList.end());
+        var unique = new java.util.HashSet<Integer>();
         Matcher ids = Pattern.compile("['\"]?id['\"]?\\s*:\\s*(\\d+)").matcher(body);
         List<Integer> starts = new ArrayList<>();
         List<Integer> idValues = new ArrayList<>();
@@ -138,9 +147,12 @@ public final class CourseScanner {
             String type = fieldString(slice, "type");
             String taskTitle = fieldString(slice, "title");
             String difficulty = fieldString(slice, "difficulty");
-            int reward = fieldInt(slice, "reward", 0);
+            int reward = fieldInt(slice, "reward", 10);
             if (module == null || type == null || taskTitle == null) {
                 continue;
+            }
+            if (idValues.get(i) < 1 || !unique.add(idValues.get(i)) || tasks.size() >= CourseBook.MAX_STEPS || reward < 0 || reward > 100000) {
+                throw new ScanException("Проверь номера заданий и размер наград курса.");
             }
             tasks.add(new Task(idValues.get(i), module, type, reward, difficulty == null ? "" : difficulty, taskTitle));
         }
@@ -206,8 +218,11 @@ public final class CourseScanner {
                 title = found.length() > 80 ? found.substring(0, 80) : found;
             }
         }
-        Course course = new Course(title, "", "", List.copyOf(tasks), true, "Шаги прочитаны со страницы " + url);
-        return result(course, url, siteOf(url), storageKey(html, url), done);
+        if (tasks.stream().map(Task::id).distinct().count() != tasks.size()) {
+            throw new ScanException("У уроков совпадают идентификаторы. Добавь уникальные data-id или ссылки на уроки.");
+        }
+        Course course = new Course(title, "html-v1", "", List.copyOf(tasks), true, "Шаги прочитаны со страницы " + url);
+        return result(course, url, url, storageKey(html, url), done, "");
     }
 
     private static void collectTasks(String html, String module, List<Task> tasks, List<Integer> done) {
@@ -217,7 +232,7 @@ public final class CourseScanner {
             if (text.length() < 6 || text.length() > 180) {
                 continue;
             }
-            int id = tasks.size() + 1;
+            int id = lessonId(items, module, text);
             String type = taskType(text);
             tasks.add(new Task(id, module, type, "code".equals(type) ? 25 : 10, "", text));
             if (isDone(items.group(1), text)) {
@@ -233,7 +248,7 @@ public final class CourseScanner {
             if (text.length() < 6 || text.length() > 180) {
                 continue;
             }
-            int id = tasks.size() + 1;
+            int id = lessonId(items, "Курс", text);
             String type = taskType(text);
             tasks.add(new Task(id, "Курс", type, "code".equals(type) ? 25 : 10, "", text));
             if (isDone(items.group(1), text)) {
@@ -242,9 +257,27 @@ public final class CourseScanner {
         }
     }
 
+    private static String attribute(String html, String name) {
+        Matcher match = Pattern.compile("(?i)(?:^|\\s)" + name + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))").matcher(html);
+        if (!match.find()) return "";
+        return match.group(1) != null ? match.group(1) : match.group(2) != null ? match.group(2) : match.group(3);
+    }
+
+    private static int lessonId(Matcher item, String module, String text) {
+        String key = attribute(item.group(1), "data-id");
+        if (key.isBlank()) key = attribute(item.group(1), "id");
+        if (key.isBlank()) key = attribute(item.group(2), "href");
+        if (key.isBlank()) key = module + "\n" + text.replaceAll("^[✓✔]\\s*|\\s*[✓✔]$", "").strip();
+        return 65536 + Math.floorMod(java.util.UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).hashCode(), Integer.MAX_VALUE - 65536);
+    }
+
     private static boolean isDone(String attributes, String text) {
-        String mark = (attributes + " " + text).toLowerCase();
-        return mark.contains("done") || mark.contains("complete") || mark.contains("solved") || mark.contains("passed") || text.contains("✓");
+        String flag = attribute(attributes, "data-done");
+        if (!flag.isEmpty()) return flag.equalsIgnoreCase("true") || flag.equals("1");
+        for (String token : attribute(attributes, "class").toLowerCase(java.util.Locale.ROOT).split("\\s+")) {
+            if (java.util.Set.of("done", "complete", "completed", "solved", "passed").contains(token)) return true;
+        }
+        return text.startsWith("✓ ") || text.endsWith(" ✓");
     }
 
     private static String taskType(String text) {
@@ -303,13 +336,9 @@ public final class CourseScanner {
         if (body.contains("pystart_game_v1") || url.contains("blerebo.github.io")) {
             return "pystart_game_v1";
         }
+        Matcher explicit = Pattern.compile("(?i)<meta\\s+name=['\"]achievka-storage-key['\"]\\s+content=['\"]([a-z0-9_-]{1,253})['\"]").matcher(body);
+        if (explicit.find()) return explicit.group(1);
         return "achievka_steps";
-    }
-
-    private static String siteOf(String url) {
-        URI uri = URI.create(url);
-        String port = uri.getPort() > 0 ? ":" + uri.getPort() : "";
-        return uri.getScheme() + "://" + uri.getHost() + port + "/";
     }
 
     private static String normalize(String url) throws ScanException {
@@ -321,24 +350,22 @@ public final class CourseScanner {
             value = "https://" + value;
         }
         try {
-            URI uri = URI.create(value);
-            if (uri.getHost() == null || uri.getHost().isBlank()) {
-                throw new ScanException("Адрес сайта не разбирается");
-            }
-            return uri.toString();
+            return CourseBook.webUri(value).toString();
         } catch (IllegalArgumentException e) {
             throw new ScanException("Адрес сайта не разбирается");
         }
     }
 
-    private static ScanResult result(Course course, String dataUrl, String siteUrl, String storageKey, List<Integer> done) throws ScanException {
+    private static ScanResult result(Course course, String dataUrl, String siteUrl, String storageKey,
+                                     List<Integer> done, String script) throws ScanException {
         if (course.tasks().isEmpty()) {
             throw new ScanException("В ответе сайта нет заданий");
         }
-        return new ScanResult(course, dataUrl, siteUrl, storageKey, List.copyOf(done));
+        return new ScanResult(course, dataUrl, siteUrl, storageKey, List.copyOf(done), script);
     }
 
-    public record ScanResult(Course course, String dataUrl, String siteUrl, String storageKey, List<Integer> foundDone) {}
+    public record ScanResult(Course course, String dataUrl, String siteUrl, String storageKey,
+                             List<Integer> foundDone, String script) {}
 
     private static int fieldInt(String slice, String name, int fallback) {
         Matcher matcher = Pattern.compile(String.format(FIELD_INT.pattern(), name)).matcher(slice);

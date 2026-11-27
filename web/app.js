@@ -1,3 +1,4 @@
+const isTour = location.pathname === "/demo.html";
 const views = {
   home: document.getElementById("view-home"),
   marks: document.getElementById("view-marks"),
@@ -13,13 +14,53 @@ const avatarEl = document.getElementById("avatar");
 const searchEl = document.getElementById("search");
 const menuPanel = document.getElementById("menu-panel");
 
-const PULL = "javascript:(function(){var name=prompt('\u0418\u043c\u044f \u0434\u043b\u044f \u0410\u0447\u0438\u0432\u043a\u0438');if(!name||!name.trim())return;var raw=localStorage.getItem('pystart_game_v1')||'{}';var token=localStorage.getItem('achievka_token')||'';fetch('http://127.0.0.1:8741/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.trim(),token:token})}).then(function(r){return r.json()}).then(function(d){if(!d.token)throw new Error();localStorage.setItem('achievka_token',d.token);return fetch('http://127.0.0.1:8741/api/v1/progress',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+d.token},body:raw})}).then(function(){alert('\u041a\u043b\u044e\u0447 \u043f\u0440\u0438\u043d\u044f\u0442. \u0412\u0435\u0440\u043d\u0438\u0441\u044c \u0432 \u0410\u0447\u0438\u0432\u043a\u0443: \u043e\u043f\u044b\u0442 \u0443\u0436\u0435 \u0442\u0430\u043c.')}).catch(function(){alert('\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u0443\u0441\u0442\u0438 Achievka.exe')})})();";
+const feedback = document.getElementById("feedback");
+const launchKey = location.hash.slice(1);
+if (/^[a-f0-9]{64}$/.test(launchKey)) {
+  sessionStorage.setItem("achievka-session", launchKey);
+  history.replaceState(null, "", location.pathname);
+}
+const apiKey = isTour ? "" : sessionStorage.getItem("achievka-session") || "";
+
+async function api(path, method = "GET", body) {
+  if (isTour) throw new Error("Демонстрация использует учебный профиль.");
+  const headers = { "X-Achievka-Session": apiKey };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Не удалось выполнить действие");
+  return data;
+}
+
+function message(text, error = false) {
+  feedback.textContent = text;
+  feedback.hidden = !text;
+  feedback.dataset.error = String(error);
+}
+
+function action(work) {
+  return async () => {
+    message("");
+    try {
+      await work();
+    } catch (error) {
+      message(error.message, true);
+    }
+  };
+}
+
+
 
 let viewName = "home";
 let query = "";
 let moduleName = "";
 let state = null;
 let signature = "";
+let revision = 0, changing = 0, polling = false;
+let importPreview = null;
+let courseDraft = {url:"", title:""};
+let coursesSignature = "";
+let snapshotDraft = "", snapshotOpen = false;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -40,6 +81,8 @@ function show(name) {
   });
   document.querySelectorAll(".nav-btn").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === name);
+    if (button.dataset.view === name) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
 }
 
@@ -56,181 +99,215 @@ function groupsOf(tasks) {
   return groups;
 }
 
-function switchEl(on) {
-  const button = el("span", "switch" + (on ? " on" : ""));
-  button.append(el("i"));
-  return button;
-}
-
 function device(mark) {
-  const card = el("article", "device");
-  const top = el("div", "device-top");
-  const glyph = el("div", "glyph");
-  glyph.innerHTML = mark.done
-    ? '<svg viewBox="0 0 24 24"><path d="M12 3 9 9H3l5 4-2 7 6-4 6 4-2-7 5-4h-6z"/></svg>'
-    : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 8v4l3 2"/></svg>';
-  top.append(glyph, switchEl(mark.done));
-  card.append(top, el("b", null, mark.title), el("p", null, mark.condition));
+  const card = el("article", "device" + (mark.done ? " unlocked" : ""));
+  const glyph = el("span", "glyph", mark.done ? "✦" : "◇");
+  glyph.setAttribute("aria-hidden", "true");
+  const detail = el("div", "badge-detail");
+  detail.append(el("b", null, mark.title), el("p", "muted", mark.condition));
+  card.append(glyph, detail, el("span", "badge-status", mark.done ? "Получено" : "Закрыто"));
   return card;
 }
 
-function scene() {
-  const wrap = el("div", "scene");
-  wrap.innerHTML = `
-    <svg viewBox="0 0 360 150" aria-hidden="true">
-      <defs>
-        <linearGradient id="soft" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#d9f6ff"/>
-          <stop offset="1" stop-color="#7ed7fb"/>
-        </linearGradient>
-      </defs>
-      <ellipse cx="250" cy="126" rx="90" ry="12" fill="#e7f6ff"/>
-      <path d="M70 118c20-48 48-70 78-70 18 0 28 12 34 28" fill="none" stroke="#bfe9f8" stroke-width="8" stroke-linecap="round"/>
-      <circle cx="78" cy="112" r="8" fill="#7fd4f8"/>
-      <circle cx="150" cy="58" r="8" fill="#9ee4fb"/>
-      <circle cx="188" cy="78" r="8" fill="#5ec8f5"/>
-      <rect x="214" y="62" width="92" height="64" rx="12" fill="url(#soft)"/>
-      <path d="M226 78h68M226 92h48" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
-      <path d="M300 48c10 8 14 18 12 30" fill="none" stroke="#9adff8" stroke-width="4" stroke-linecap="round"/>
-      <circle cx="318" cy="40" r="8" fill="#c8f1ff"/>
-    </svg>`;
-  return wrap;
+function progressBar(value, maximum, label) {
+  const track = el("progress", "progress");
+  track.max = Math.max(maximum, 1);
+  track.value = value;
+  track.setAttribute("aria-label", label);
+  return track;
 }
 
-function ring(percent, label) {
-  const radius = 52;
-  const length = 2 * Math.PI * radius;
-  const wrap = el("div", "ring-wrap");
-  wrap.innerHTML = `
-    <svg viewBox="0 0 120 120">
-      <defs>
-        <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#8ae7ff"/>
-          <stop offset="1" stop-color="#3db7f6"/>
-        </linearGradient>
-      </defs>
-      <circle class="ring-track" cx="60" cy="60" r="${radius}"></circle>
-      <circle class="ring-value" cx="60" cy="60" r="${radius}"
-        stroke-dasharray="${length}" stroke-dashoffset="${length}"></circle>
-    </svg>`;
-  const labelBox = el("div", "ring-label");
-  labelBox.append(el("b", null, percent + "%"), el("span", null, label));
-  wrap.append(labelBox);
-  requestAnimationFrame(() => {
-    const circle = wrap.querySelector(".ring-value");
-    circle.style.strokeDashoffset = String(length * (1 - percent / 100));
-  });
-  return wrap;
+function metric(label, value, detail, mark, tone) {
+  const card = el("article", "card metric " + tone);
+  const symbol = el("span", "metric-icon", mark);
+  symbol.setAttribute("aria-hidden", "true");
+  const copy = el("div");
+  copy.append(el("span", "muted", label), el("strong", null, value), el("small", "muted", detail));
+  card.append(symbol, copy);
+  return card;
+}
+
+const companions = {
+  "buddy-ember": { kind: "Огненный лис", talent: "Находит модуль, который проще всего закончить." },
+  "buddy-luna": { kind: "Лунный мотылёк", talent: "Ищет самое ценное из оставшихся заданий." },
+  "buddy-amethyst": { kind: "Кристальный дракон", talent: "Хранит победную открытку с твоим результатом." }
+};
+
+function portrait(id) {
+  const img = el("img", "buddy-portrait");
+  img.src = "/" + id + ".png";
+  img.alt = "";
+  return img;
+}
+
+function openCollection() {
+  searchEl.value = query = "";
+  show("rewards");
+  paint();
+}
+
+function companionPanel(data, mark) {
+  const panel = el("article", "card buddy-panel " + mark.id);
+  const copy = el("div", "buddy-advice");
+  copy.append(el("h2", null, mark.title));
+  let tip, button;
+  if (mark.id === "buddy-amethyst") {
+    tip = "«Этот кристалл твой. Сохраним, какой путь ты прошёл?»";
+    button = actionButton("Скопировать открытку", async () => {
+      await copyText("✦ Ачивка ✦\n" + data.studentName + " · «" + data.courseTitle + "»\n" +
+        "Пройдено заданий: " + data.solvedCount + " из " + data.taskCount + " · " + data.xp + " XP\n🐉 Спутник — Аметист");
+      message("Победная открытка скопирована.");
+    });
+  } else if (!data.next) {
+    tip = mark.id === "buddy-ember" ? "«Все тропинки пройдены. Загляни в коллекцию, там тебя ждёт дракон!»" :
+      "«Ни одной пропущенной звезды. В коллекции проснулся Аметист!»";
+    button = actionButton("К спутникам", openCollection);
+  } else {
+    let target = data.next;
+    if (mark.id === "buddy-ember") {
+      let minimum = Infinity;
+      for (const tasks of groupsOf(data.tasks).values()) {
+        const remaining = tasks.filter(task => !task.done);
+        if (remaining.length && remaining.length < minimum) {
+          minimum = remaining.length;
+          target = remaining[0];
+        }
+      }
+      tip = "«Ближе всего к финишу модуль „" + target.module + "“. Осталось заданий: " + minimum + ".»";
+    } else {
+      for (const task of data.tasks) {
+        if (!task.done && task.reward > target.reward) target = task;
+      }
+      tip = "«Вижу яркую звезду! За „" + target.title + "“ дают " + target.reward + " XP.»";
+    }
+    button = actionButton(data.builtIn ? "К заданию →" : "Открыть курс →", () => openCourse(data, target.id));
+  }
+  copy.append(el("p", "muted", tip));
+  panel.append(portrait(mark.id), copy, button);
+  return panel;
 }
 
 function renderHome(data) {
   const root = el("div", "home-grid");
-  const left = el("div", "stack");
-  const right = el("div", "right");
+  const hero = el("article", "quest-hero");
+  const copy = el("div", "hero-copy");
+  const heading = data.next ? data.next.title : data.taskCount ? "Курс пройден!" : "Заданий пока нет";
+  const label = data.next ? "Следующее задание" : data.taskCount ? "Все задания выполнены" : "Текущий курс";
+  copy.append(el("p", "eyebrow hero-label", label), el("h2", null, data.courseTitle), el("p", "hero-description", heading));
+  const actions = el("div", "hero-actions");
+  if (data.next) actions.append(el("span", "quest-xp", "+" + data.next.reward + " XP"));
+  const start = actionButton(data.next ? "К заданию →" : "Открыть курс →", () => openCourse(data, data.next && data.next.id));
+  start.classList.add("primary");
+  actions.append(start);
+  const selected = data.rewards.find(mark => mark.id === data.companion && mark.done && companions[mark.id]);
+  if (!selected && data.rewards.some(mark => mark.done && companions[mark.id])) {
+    const choose = actionButton("Выбрать спутника", openCollection);
+    choose.className = "hero-choose";
+    actions.append(choose);
+  }
+  copy.append(actions);
+  hero.append(copy);
 
-  const top = el("div", "row");
-  const chart = el("article", "card chart");
-  const head = el("div", "chart-head");
-  head.append(el("h2", null, "Опыт по модулям"), el("span", "xp-spark", "XP"));
-  const bars = el("div", "bars");
-  const groups = [...groupsOf(data.tasks)];
-  groups.forEach(([name, tasks], index) => {
-    const earned = tasks.filter((task) => task.done).reduce((sum, task) => sum + task.reward, 0);
-    const total = tasks.reduce((sum, task) => sum + task.reward, 0) || 1;
-    const col = el("div", "bar-col");
-    const track = el("div", "bar-track");
-    const fill = el("span", "bar-fill");
-    track.append(fill);
-    col.append(track, el("span", null, "M" + (index + 1)));
-    bars.append(col);
-    requestAnimationFrame(() => { fill.style.height = Math.round((earned / total) * 100) + "%"; });
-    col.title = name + ": " + earned + " / " + total + " XP";
-  });
-  chart.append(head, bars);
+  const metrics = el("div", "metrics");
+  const unlocked = data.achievements.filter(mark => mark.done).length;
+  metrics.append(
+    metric("Опыт", data.xp + " XP", "Из " + data.xpMax + " XP", "ϟ", "violet"),
+    metric("Задания", data.solvedCount + " / " + data.taskCount, "Выполнено", "✓", "green"),
+    metric("Достижения", unlocked + " / " + data.achievements.length, "Открыто", "✦", "amber")
+  );
 
-  const level = el("article", "card level");
-  level.append(el("div", "xp-mark", "XP"));
-  level.append(el("div", "big", String(data.xp)));
-  level.append(el("div", "sub", "Сейчас"));
-  level.append(document.createElement("hr"));
-  level.append(el("div", "big", data.nextLevelName ? String(data.nextAt) : String(data.xpMax)));
-  level.append(el("div", "sub", data.nextLevelName ? "До «" + data.nextLevelName + "»" : "Весь курс"));
-  top.append(chart, level);
-
-  const label = el("h2", "section-label", "Знаки");
-  const devices = el("div", "devices");
-  data.achievements.filter((mark) => matches(mark.title + mark.condition)).slice(0, 6).forEach((mark) => {
-    devices.append(device(mark));
-  });
-  left.append(top, label, devices);
-
-  const mods = el("div", "modules");
-  groups.slice(0, 4).forEach(([name]) => {
-    const button = el("button", "mod" + (name === moduleName ? " on" : ""));
-    button.type = "button";
-    button.innerHTML = '<svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M8 10h8M8 14h5"/></svg>';
-    button.append(document.createTextNode(name.replace("Модуль ", "М. ")));
-    button.addEventListener("click", () => {
-      moduleName = moduleName === name ? "" : name;
+  const panels = el("div", "home-panels");
+  const map = el("section", "card route-card");
+  const mapHeading = el("div", "section-head");
+  mapHeading.append(el("h2", null, "Карта курса"), actionButton("Все задания →", () => {
+    moduleName = "";
+    show("steps");
+    paint();
+  }));
+  map.append(mapHeading, progressBar(data.solvedCount, data.taskCount, "Общий прогресс курса"));
+  const modules = el("div", "modules");
+  for (const [name, tasks] of groupsOf(data.tasks)) {
+    const done = tasks.filter(task => task.done).length;
+    const current = data.next && data.next.module === name;
+    const node = actionButton(name, () => {
+      moduleName = name;
       show("steps");
       paint();
     });
-    mods.append(button);
-  });
-
-  const feature = el("article", "card feature");
-  feature.append(el("h2", null, data.next ? data.next.module : "Курс закрыт"));
-  feature.append(scene());
-  if (data.next) {
-    feature.append(el("h3", null, data.next.id + ". " + data.next.title));
-    feature.append(el("p", null, data.next.condition));
-  } else {
-    feature.append(el("h3", null, "Все задания сданы"));
-    feature.append(el("p", null, "Это не оценка и не строка в журнале."));
+    node.className = "module-node" + (done === tasks.length ? " completed" : current ? " current" : "");
+    node.prepend(el("span", "module-icon", done === tasks.length ? "✓" : current ? "◆" : "◇"));
+    node.append(el("small", "muted", done + "/" + tasks.length));
+    modules.append(node);
   }
-  const stats = el("div", "stats");
-  stats.append(el("span", null, "Опыт шага: " + (data.next ? data.next.reward : data.xpMax) + " XP"));
-  const pill = el("div", "pill");
-  const percent = data.xpMax ? Math.round((data.xp / data.xpMax) * 100) : 0;
-  pill.style.setProperty("--p", percent + "%");
-  pill.append(el("span", null, percent + "%"));
-  stats.append(pill);
-  feature.append(stats);
+  if (!modules.children.length) modules.append(el("p", "muted", "Задания курса недоступны."));
+  map.append(modules);
 
-  const dial = el("article", "card dial-card");
-  const side = el("div", "dial-side");
-  side.append(el("div", "chip", data.levelName));
-  side.append(el("div", "chip", data.solvedCount + " / " + data.taskCount));
-  const modes = el("div", "modes");
-  const practice = data.achievements.find((mark) => mark.id === "practice-all");
-  const order = data.achievements.find((mark) => mark.id === "in-order");
-  [["Путь", true], ["Код", practice && practice.done], ["Ряд", order && order.done]].forEach(([name, on]) => {
-    modes.append(el("div", "mode" + (on ? " on" : ""), name));
-  });
-  dial.append(side, ring(percent, "Опыт"), modes);
-
-  right.append(mods, feature, dial);
-  root.append(left, right);
+  const badges = el("section", "card badges-card");
+  const badgeHeading = el("div", "section-head");
+  badgeHeading.append(el("h2", null, "Достижения"), actionButton("Все →", () => show("marks")));
+  badges.append(badgeHeading);
+  const preview = data.achievements.filter(mark => mark.done).slice(-2).reverse();
+  if (preview.length < 2) preview.push(...data.achievements.filter(mark => !mark.done).slice(0, 2 - preview.length));
+  preview.forEach(mark => badges.append(device(mark)));
+  if (!preview.length) badges.append(el("p", "muted", "Достижения появятся после загрузки курса."));
+  panels.append(map, badges);
+  root.append(hero);
+  if (!data.builtIn && !data.taskCount) root.append(actionButton("Загрузить список уроков", scan));
+  if (selected) root.append(companionPanel(data, selected));
+  root.append(metrics, panels);
   return root;
 }
 
 function renderMarks(data) {
   const box = el("div", "list");
-  box.append(el("h2", "section-label", "Знаки"));
-  box.append(el("p", "muted", "Условие видно до сдачи. Знак не прибавляет опыт второй раз."));
+  box.append(el("h2", "section-label", "Достижения"));
   const grid = el("div", "devices");
   data.achievements.filter((mark) => matches(mark.title + mark.condition + mark.detail)).forEach((mark) => grid.append(device(mark)));
+  if (!grid.children.length) grid.append(el("p", "muted", "Достижения не найдены."));
   box.append(grid);
   return box;
 }
 
 function renderRewards(data) {
   const box = el("div", "list");
-  box.append(el("h2", "section-label", "Награды"));
-  box.append(el("p", "muted", "Личная отметка за свой шаг. Места среди других нет."));
+  const buddies = el("div", "buddy-grid");
+  const collection = data.rewards.filter(mark => companions[mark.id]);
+  for (const mark of collection) {
+    const buddy = companions[mark.id];
+    if (!matches([mark.title, mark.condition, buddy.kind, buddy.talent, "спутники"].join(" "))) continue;
+    const selected = data.companion === mark.id;
+    const card = el("article", "buddy-card " + mark.id + (selected ? " selected" : ""));
+    const art = el("div", "buddy-art");
+    const status = selected ? "С тобой" : mark.done ? "Открыт" : "Закрыт";
+    art.append(portrait(mark.id), el("span", "buddy-status", status));
+    const body = el("div", "buddy-info");
+    body.append(el("small", "muted", buddy.kind), el("h3", null, mark.title), el("p", "buddy-talent", buddy.talent));
+    if (mark.done) {
+      const button = actionButton(selected ? "Оставить в коллекции" : "Взять с собой", async () => {
+        await postCourse("/api/companion", { courseId: data.courseId, profileId: data.profileId, id: selected ? "" : mark.id });
+        message(selected ? "Спутник вернулся в коллекцию." : mark.title + " ждёт тебя на главной.");
+      });
+      button.dataset.buddy = mark.id;
+      body.append(button);
+    } else {
+      const goal = el("div", "buddy-goal");
+      goal.append(el("b", null, mark.condition), el("small", "muted", mark.detail));
+      body.append(goal);
+    }
+    card.append(art, body);
+    buddies.append(card);
+  }
+  if (buddies.children.length) {
+    const heading = el("div", "section-head");
+    heading.append(el("h2", "section-label", "Спутники"), el("span", "muted",
+      "Открыто " + collection.filter(mark => mark.done).length + " из " + collection.length));
+    box.append(heading, buddies);
+  }
   const grid = el("div", "devices");
-  data.rewards.filter((mark) => matches(mark.title + mark.condition)).forEach((mark) => grid.append(device(mark)));
-  if (data.courseOpen) {
+  data.rewards.filter(mark => !companions[mark.id] && matches(mark.title + " " + mark.condition)).forEach(mark => grid.append(device(mark)));
+  if (grid.children.length) box.append(el("h2", "section-label", "Титулы и знаки"), grid);
+  if (!box.children.length) box.append(el("p", "muted", "Награды не найдены."));
+  if (data.courseOpen && matches("Сводка закрытых шагов")) {
     const card = el("article", "card wide");
     card.append(el("h2", null, "Сводка закрытых шагов"));
     const area = el("textarea", "copy");
@@ -244,7 +321,13 @@ function renderRewards(data) {
 
 function renderSteps(data) {
   const box = el("div", "list");
-  box.append(el("h2", "section-label", "Шаги курса"));
+  const heading = el("div", "section-head");
+  heading.append(el("h2", "section-label", moduleName || "Задания курса"));
+  if (moduleName) heading.append(actionButton("Все модули", () => {
+    moduleName = "";
+    paint();
+  }));
+  box.append(heading);
   groupsOf(data.tasks).forEach((tasks, name) => {
     if (moduleName && name !== moduleName) return;
     const visible = tasks.filter((task) => matches(task.title + name));
@@ -254,14 +337,69 @@ function renderSteps(data) {
     const row = el("div", "steps");
     visible.forEach((task) => {
       const step = el("div", "step" + (task.done ? " done" : ""));
-      step.append(el("b", null, task.id + ". " + task.title));
-      step.append(el("small", null, task.type + " · " + task.reward + " XP"));
+      const body = el("div");
+      body.append(el("b", null, task.title), el("small", null, task.type + (task.done ? " · Выполнено" : "")));
+      step.append(el("span", "step-number", task.done ? "✓" : String(data.tasks.indexOf(task) + 1)), body, el("span", "quest-xp", task.reward + " XP"));
       row.append(step);
     });
     block.append(row);
     box.append(block);
   });
+  if (box.children.length === 1) box.append(el("p", "muted", "Задания не найдены."));
   return box;
+}
+
+function renderImportPreview() {
+  const preview = importPreview;
+  const card = el("section", "card import-preview");
+  card.append(el("h2", null, "Проверка импорта"), el("p", null, preview.title));
+  if (preview.unknown) card.append(el("p", "muted", "В снимке есть неизвестные номера: " + preview.unknown + ". Они будут пропущены."));
+  if (preview.pageWarning) card.append(el("p", "muted", "Проверь страницу, на которой создан снимок: " + preview.pageWarning));
+  if (preview.tasks.some(t => t.legacy)) card.append(el("p", "muted", "У старых отметок есть только номер строки. Сверь их с названиями уроков и выбери совпадения."));
+  if (preview.legacy) card.append(el("p", "muted", "Снимок старого формата. Проверь, что задания относятся к этому курсу."));
+  card.append(el("p", "muted", "Отметь задания, которые нужно засчитать."));
+  const list = el("div", "import-list");
+  for (const task of preview.tasks) {
+    const row = el("label");
+    const check = el("input");
+    check.type = "checkbox";
+    check.disabled = task.saved;
+    check.checked = task.saved || preview.selected.has(task.id);
+    check.addEventListener("change", () => {
+      if (check.checked) preview.selected.add(task.id);
+      else preview.selected.delete(task.id);
+    });
+    const note = task.saved ? "уже сдано" : task.legacy ? "проверь старую отметку по номеру" :
+      task.changed ? "изменение в списке" : task.found ? "сайт отметил как сданное" : "";
+    row.append(check, el("span", null, task.title), el("small", "muted", note));
+    list.append(row);
+  }
+  card.append(list);
+  if (preview.removed.length) card.append(el("p", "muted", "Исчезли из списка: " + preview.removed.join(", ")));
+  const actions = el("div", "actions");
+  actions.append(actionButton("Применить", async () => {
+    if (preview !== importPreview) return;
+    const solved = [...preview.selected];
+    if (preview.key) await postCourse("/api/scan/commit", {key:preview.key, solved});
+    else await postCourse("/api/courses/import", {...preview.context, solved});
+    importPreview = null;
+    if (preview.key) courseDraft = {url:"", title:""};
+    else snapshotDraft = "";
+    coursesSignature = "";
+    paint();
+    show("home");
+    message("Изменения сохранены.");
+  }), actionButton("Отмена", () => { importPreview = null; coursesSignature = ""; paint(); }));
+  card.append(actions);
+  return card;
+}
+
+function displayPreview(preview) {
+  preview.selected = new Set(preview.tasks.filter(t => t.found && !t.saved && !preview.reset).map(t => t.id));
+  importPreview = preview;
+  coursesSignature = "";
+  paint();
+  show("courses");
 }
 
 function renderCourses(data) {
@@ -279,35 +417,42 @@ function renderCourses(data) {
     } else {
       const use = el("button", "use", "Открыть");
       use.type = "button";
-      use.addEventListener("click", () => selectCourse(course.id));
+      use.addEventListener("click", action(() => selectCourse(course.id)));
       actions.append(use);
     }
     const drop = el("button", "drop", "Убрать");
     drop.type = "button";
-    drop.addEventListener("click", () => removeCourse(course.id, course.title));
+    drop.addEventListener("click", action(() => removeCourse(course.id, course.title)));
     actions.append(drop);
     card.append(text, actions);
     box.append(card);
   });
+  if (importPreview) { box.prepend(renderImportPreview()); return box; }
+  if (!data.builtIn) box.append(actionButton("Обновить список уроков", scan));
   const form = el("form", "card course-form");
   form.append(el("h2", null, "Новый сайт"));
   const url = el("input");
   url.placeholder = "https://сайт-курса/";
   url.required = true;
+  url.value = courseDraft.url;
+  url.addEventListener("input", () => courseDraft.url = url.value);
   const title = el("input");
   title.placeholder = "Название, если хочешь своё";
+  title.value = courseDraft.title;
+  title.addEventListener("input", () => courseDraft.title = title.value);
   const error = el("p", "gate-error");
   error.hidden = true;
-  const submit = el("button", null, "Добавить и открыть");
+  const submit = el("button", null, "Посмотреть задания");
   submit.type = "submit";
   form.append(url, title, error, submit);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     error.hidden = true;
+    submit.disabled = true;
     addCourse(url.value.trim(), title.value.trim()).catch((reason) => {
       error.hidden = false;
       error.textContent = reason.message;
-    });
+    }).finally(() => { submit.disabled = false; });
   });
   box.append(form);
   return box;
@@ -315,30 +460,163 @@ function renderCourses(data) {
 
 function renderLink(data) {
   const card = el("article", "card link-card");
-  card.append(el("h2", null, data.connected ? data.studentName : "Связь с сайтом"));
-  if (data.connected) {
-    card.append(el("p", null, "Ключ " + data.apiToken + ". Опыт " + data.xp + " из " + data.xpMax + "."));
-  } else {
-    card.append(el("p", null, "Ключа пока нет. На сайте курса впиши имя и нажми «Получить ключ». Уже сданные задания придут вместе с ним."));
-  }
-  const pull = el("a", null, "Забрать сдачу с этого сайта");
-  pull.href = pullBookmark(data);
-  card.append(pull);
-  card.append(el("p", "muted", "Если задания уже закрыты на сайте: перетащи ссылку на панель закладок, открой сайт и нажми её."));
-  card.append(el("p", "muted", data.live ? data.sourceNote : "Сайт сейчас не прочитан. " + data.sourceNote));
+  card.append(el("h2", null, data.studentName));
   const actions = el("div", "actions");
-  const open = el("a", null, "Открыть курс");
-  open.href = "/course/";
-  open.target = "_blank";
-  const rescan = el("button", null, "Сканировать снова");
-  rescan.type = "button";
-  rescan.addEventListener("click", scan);
-  const reset = el("button", null, "Сбросить прогресс");
-  reset.type = "button";
-  reset.addEventListener("click", resetProgress);
-  actions.append(open, rescan, reset);
-  card.append(actions);
+  actions.append(
+    actionButton("Скопировать ключ профиля", async () => {
+      await copyText(data.apiToken);
+      message("Ключ скопирован.");
+    }),
+    actionButton("Открыть курс", () => openCourse(data)),
+    actionButton("Сканировать снова", scan),
+    actionButton("Сбросить прогресс", resetProgress)
+  );
+  card.append(actions, el("p", "muted", data.sourceNote));
+  if (data.scannedAt) card.append(el("p", "muted", "Последнее обновление: " + new Date(data.scannedAt).toLocaleString()));
+
+  const backup = el("details");
+  backup.append(el("summary", null, "Резервная копия и перенос на другой ПК"));
+  const backupActions = el("div", "actions");
+  const file = el("input");
+  file.type = "file";
+  file.accept = ".json,application/json";
+  file.hidden = true;
+  file.addEventListener("change", action(async () => {
+    const selected = file.files[0];
+    file.value = "";
+    if (!selected) return;
+    if (selected.size > 64 * 1048576) throw new Error("Максимальный размер файла — 64 МБ.");
+    const text = await readFile(selected);
+    await mutate(async () => {
+      const result = await api("/api/backup", "POST", parseImport(text));
+      apply(result.state);
+      message("Резервная копия загружена. Курсов в файле: " + result.imported + ".");
+    });
+  }));
+  backupActions.append(actionButton("Сохранить JSON", exportBackup), actionButton("Загрузить JSON", () => file.click()), file);
+  backup.append(el("p", "muted", isTour ? "Сохраните копию заданий, прогресса и выбранного спутника." : "В копии сохраняются уроки, прогресс, спутник и синхронизированная комната героя с покупками и ответами. После обновления с версии 1.2 открой встроенный курс один раз для переноса комнаты."), backupActions);
+  card.append(backup);
+
+  const transfer = el("details");
+  transfer.open = snapshotOpen;
+  transfer.addEventListener("toggle", () => { snapshotOpen = transfer.open; });
+  transfer.append(el("summary", null, "Перенести выполненные задания с сайта"));
+  transfer.append(el("p", "muted", "Создай закладку в браузере и вставь скопированный код в поле адреса. Открой сайт курса, нажми закладку и вставь сюда полученный JSON."));
+  const pasted = el("textarea");
+  pasted.placeholder = '{"solved":[1,2]}';
+  pasted.setAttribute("aria-label", "Выполненные задания в формате JSON");
+  pasted.value = snapshotDraft;
+  pasted.addEventListener("input", () => { snapshotDraft = pasted.value; });
+  const transferActions = el("div", "actions");
+  transferActions.append(
+    actionButton("Скопировать код закладки", async () => {
+      await copyText(bookmark(data.storageKey, data.sourceUrl, data.version));
+      message("Код скопирован. Вставь его в поле адреса новой закладки.");
+    }),
+    actionButton("Загрузить задания", async () => {
+      const snapshot = parseImport(pasted.value);
+      if (!snapshot || !Array.isArray(snapshot.solved)) throw new Error("В JSON нужен список solved.");
+      if (snapshot.sourceUrl && snapshot.sourceUrl !== data.sourceUrl) throw new Error("Снимок относится к другому курсу.");
+      if (snapshot.page && new URL(snapshot.page).origin !== new URL(data.siteUrl).origin) throw new Error("Снимок получен с другого сайта.");
+      if (snapshot.version && data.version && data.version !== snapshot.version) throw new Error("Версия курса изменилась. Обнови закладку и получи снимок снова.");
+      const ids = new Set(snapshot.solved);
+      const pageWarning = snapshot.page && new URL(snapshot.page).pathname !== new URL(data.siteUrl).pathname ? snapshot.page : "";
+      const tasks = data.tasks.map((t,i) => {
+        const positional = data.version === "html-v1" && !ids.has(t.id) && ids.has(i+1);
+        return {...t, saved:t.done, found:ids.has(t.id), legacy:positional};
+      }).filter(t => t.found || t.legacy);
+      if (!tasks.length) throw new Error("В снимке нет известных заданий этого курса.");
+      const recognized = new Set(data.tasks.map(t=>t.id));
+      if (data.version === "html-v1") data.tasks.forEach((t,i)=>recognized.add(i+1));
+      const unknown = [...ids].filter(id=>!recognized.has(id)).length;
+      displayPreview({title:data.courseTitle, legacy:!snapshot.sourceUrl, pageWarning, unknown, reset:Boolean(pageWarning), tasks, removed:[],
+        context:{id:data.courseId, profileId:data.profileId, resetNonce:data.resetNonce, savedAt:data.scannedAt}});
+    })
+  );
+  transfer.append(pasted, transferActions);
+  card.append(transfer);
   return card;
+}
+
+function actionButton(label, work) {
+  const button = el("button", null, label);
+  button.type = "button";
+  button.addEventListener("click", action(work));
+  return button;
+}
+
+async function copyText(text) {
+  if (window.achievkaDesktop) window.achievkaDesktop.copy(text);
+  else await navigator.clipboard.writeText(text);
+}
+
+function parseImport(text) {
+  try {
+    return JSON.parse(text.replace(/^\uFEFF/, ""));
+  } catch {
+    throw new Error("Не удалось прочитать JSON.");
+  }
+}
+
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Не удалось прочитать файл."));
+    reader.readAsText(file, "UTF-8");
+  });
+}
+
+async function exportBackup() {
+  const data = await api("/api/backup");
+  const json = JSON.stringify(data);
+  if (new Blob([json]).size > 64 * 1048576) throw new Error("Размер резервной копии превышает 64 МБ.");
+  if (window.achievkaDesktop) {
+    if (window.achievkaDesktop.saveBackup(json)) message("Резервная копия сохранена.");
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const download = el("a");
+  download.href = url;
+  download.download = "achievka-progress.json";
+  document.body.append(download);
+  download.click();
+  download.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function bookmark(key, sourceUrl, version) {
+  function copyProgress(storageKey, sourceUrl, version) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+      if (!Array.isArray(saved.solved)) throw new Error();
+      const json = JSON.stringify({ sourceUrl, version, page:location.href.split(/[?#]/)[0], solved:saved.solved });
+      const show = () => prompt("Скопируй JSON и вставь его в Ачивку", json);
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(json)
+          .then(() => alert("Задания скопированы. Вставь их в Ачивку."), show);
+      } else show();
+    } catch {
+      alert("В этом браузере у сайта пока нет сохранённых заданий.");
+    }
+  }
+  return "javascript:(" + copyProgress.toString().replace(/\r?\n/g, " ") + ")(" + JSON.stringify(key) + "," + JSON.stringify(sourceUrl) + "," + JSON.stringify(version) + ")";
+}
+
+async function openCourse(data = state, taskId) {
+  if (!data) return;
+  const url = new URL(data.courseUrl);
+  if (data.builtIn) {
+    if (taskId) url.searchParams.set("task", String(taskId));
+    url.searchParams.set("theme", document.documentElement.dataset.theme);
+    const pair = await api("/api/courses/pair", "POST", { id: data.courseId });
+    url.hash = new URLSearchParams({
+      achievka: pair.key, profile: pair.profile, version: String(pair.resetNonce)
+    }).toString();
+  }
+  if (window.achievkaDesktop) window.achievkaDesktop.open(url.toString(), !data.builtIn);
+  else window.open(url.toString(), "_blank", "noopener");
+  menuVisibility(false);
 }
 
 function paint() {
@@ -346,7 +624,8 @@ function paint() {
   try {
   const name = state.connected ? state.studentName : "Ученик";
   helloEl.textContent = "Привет, " + name;
-  courseNameEl.textContent = state.courseTitle || "";
+  courseNameEl.textContent = state.levelName || "";
+  document.getElementById("profile-name").textContent = name;
   avatarEl.textContent = name.trim().charAt(0).toUpperCase() || "А";
   renderCourseMenu(state);
   views.home.replaceChildren(renderHome(state));
@@ -354,7 +633,11 @@ function paint() {
   views.rewards.replaceChildren(renderRewards(state));
   views.steps.replaceChildren(renderSteps(state));
   views.link.replaceChildren(renderLink(state));
-  views.courses.replaceChildren(renderCourses(state));
+  const courseKey = JSON.stringify([state.courses, state.profileId, query]);
+  if (coursesSignature !== courseKey) {
+    views.courses.replaceChildren(renderCourses(state));
+    coursesSignature = courseKey;
+  }
   show(viewName);
   } catch (error) {
     console.error(error);
@@ -362,20 +645,14 @@ function paint() {
 }
 
 function apply(next) {
-  const nextSignature = JSON.stringify({
-    xp: next.xp,
-    solved: next.solvedCount,
-    name: next.studentName,
-    token: next.apiToken,
-    live: next.live,
-    tasks: next.tasks.map((task) => task.done),
-    marks: next.achievements.map((mark) => mark.done),
-    rewards: next.rewards.map((mark) => mark.done),
-    next: next.next && next.next.id,
-    course: next.courseId,
-    courses: (next.courses || []).map((course) => course.id + course.title + course.active)
-  });
+  const nextSignature = JSON.stringify(next);
+  if (state && (state.courseId !== next.courseId || state.profileId !== next.profileId || state.resetNonce !== next.resetNonce)) {
+    snapshotDraft = "";
+    importPreview = null;
+    coursesSignature = "";
+  }
   const first = !state;
+  if (state && state.courseId !== next.courseId) moduleName = "";
   state = next;
   if (first || nextSignature !== signature) {
     signature = nextSignature;
@@ -383,93 +660,113 @@ function apply(next) {
   }
 }
 
-function pullBookmark(data) {
-  const key = (data.storageKey || "pystart_game_v1").replace(/[^a-z0-9_]/gi, "");
-  const course = encodeURIComponent(data.courseId || "");
-  return "javascript:(function(){var name=prompt('\u0418\u043c\u044f \u0434\u043b\u044f \u0410\u0447\u0438\u0432\u043a\u0438');if(!name||!name.trim())return;var raw=localStorage.getItem('" + key + "')||'{}';var token=localStorage.getItem('achievka_token')||'';fetch('http://127.0.0.1:8741/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.trim(),token:token})}).then(function(r){return r.json()}).then(function(d){if(!d.token)throw new Error();localStorage.setItem('achievka_token',d.token);return fetch('http://127.0.0.1:8741/api/v1/progress?course=" + course + "',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+d.token},body:raw})}).then(function(){alert('\u041a\u043b\u044e\u0447 \u043f\u0440\u0438\u043d\u044f\u0442. \u0412\u0435\u0440\u043d\u0438\u0441\u044c \u0432 \u0410\u0447\u0438\u0432\u043a\u0443: \u043e\u043f\u044b\u0442 \u0443\u0436\u0435 \u0442\u0430\u043c.')}).catch(function(){alert('\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u0443\u0441\u0442\u0438 Achievka.exe')})})();";
-}
-
 function renderCourseMenu(data) {
   menuCourses.replaceChildren();
   (data.courses || []).forEach((course) => {
     const button = el("button", course.active ? "on" : "", course.title);
     button.type = "button";
-    button.addEventListener("click", () => selectCourse(course.id));
+    button.addEventListener("click", action(() => selectCourse(course.id)));
     menuCourses.append(button);
   });
 }
 
-async function postCourse(path, body) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Не получилось");
+async function mutate(work) {
+  revision++;
+  changing++;
+  try {
+    return await work();
+  } finally {
+    changing--;
   }
-  signature = "";
-  apply(data);
-  return data;
 }
 
-function selectCourse(id) {
-  return postCourse("/api/courses/select", { id }).then(() => {
-    menuPanel.hidden = true;
-    show("home");
+function postCourse(path, body) {
+  return mutate(async () => {
+    const result = await api(path, "POST", body);
+    apply(result);
+    return result;
   });
 }
 
-function addCourse(url, title) {
-  return postCourse("/api/courses", { url, title }).then(() => show("home"));
+async function selectCourse(id) {
+  await postCourse("/api/courses/select", { id });
+  menuVisibility(false);
+  show("home");
+}
+
+async function addCourse(url, title) {
+  displayPreview(await api("/api/scan/preview", "POST", { url, title }));
 }
 
 function removeCourse(id, title) {
-  if (!confirm("Убрать курс «" + title + "» из меню? Сдача на сайте останется.")) return Promise.resolve();
+  if (!confirm("Убрать курс «" + title + "» из меню? Прогресс сохранится.")) return;
   return postCourse("/api/courses/remove", { id });
 }
 
 async function load() {
-  const response = await fetch("/api/state");
-  apply(await response.json());
+  if (changing || polling) return;
+  const started = revision;
+  polling = true;
+  try {
+    const next = await api("/api/state");
+    if (started === revision && !changing) apply(next);
+  } finally {
+    polling = false;
+  }
 }
 
 async function scan() {
-  helloEl.textContent = "Сканируем сайт…";
-  const response = await fetch("/api/rescan", { method: "POST" });
-  signature = "";
-  apply(await response.json());
-  menuPanel.hidden = true;
+  message("Сканируем сайт…");
+  if (state.builtIn) { menuVisibility(false); message("Встроенный курс обновляется вместе с приложением."); return; }
+  const preview = await api("/api/scan/preview", "POST", {});
+  menuVisibility(false);
+  message("");
+  displayPreview(preview);
 }
 
 async function resetProgress() {
-  if (!confirm("Сбросить только прогресс Ачивки на этом компьютере?")) return;
-  const response = await fetch("/api/reset", { method: "POST" });
-  signature = "";
-  apply(await response.json());
-  menuPanel.hidden = true;
+  if (!confirm("Сбросить прогресс этого курса в текущем профиле?")) return;
+  await postCourse("/api/reset");
+  menuVisibility(false);
+  message("Прогресс курса сброшен.");
 }
 
 document.getElementById("nav").addEventListener("click", (event) => {
   const button = event.target.closest(".nav-btn");
   if (!button) return;
+  if (button.dataset.view === "steps" && moduleName) {
+    moduleName = "";
+    paint();
+  }
   show(button.dataset.view);
 });
 document.querySelector(".side-end").addEventListener("click", () => show("link"));
-document.getElementById("menu").addEventListener("click", () => {
-  menuPanel.hidden = !menuPanel.hidden;
+const menuButton = document.getElementById("menu");
+function menuVisibility(open) {
+  menuPanel.hidden = !open;
+  menuButton.setAttribute("aria-expanded", String(open));
+}
+menuButton.addEventListener("click", () => menuVisibility(menuPanel.hidden));
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !menuPanel.hidden) {
+    menuVisibility(false);
+    menuButton.focus();
+  }
 });
-document.getElementById("rescan").addEventListener("click", scan);
+document.getElementById("rescan").addEventListener("click", action(scan));
 document.getElementById("manage-courses").addEventListener("click", () => {
-  menuPanel.hidden = true;
+  menuVisibility(false);
   show("courses");
 });
-document.getElementById("reset").addEventListener("click", resetProgress);
-document.getElementById("logout").addEventListener("click", logout);
+document.getElementById("reset").addEventListener("click", action(resetProgress));
+document.getElementById("logout").addEventListener("click", action(logout));
+document.getElementById("open-course").addEventListener("click", action(() => openCourse()));
 searchEl.addEventListener("input", () => {
   query = searchEl.value.trim().toLowerCase();
-  if (query && viewName === "home") show("marks");
+  if (query && !["steps", "marks", "rewards"].includes(viewName)) {
+    moduleName = "";
+    show("steps");
+  }
   paint();
 });
 
@@ -480,18 +777,19 @@ const themeSwitch = document.getElementById("theme-switch");
 function applyTheme(theme) {
   const dark = theme === "dark";
   document.documentElement.dataset.theme = dark ? "dark" : "light";
-  localStorage.setItem("achievka-theme", dark ? "dark" : "light");
+  if (!isTour) localStorage.setItem("achievka-theme", dark ? "dark" : "light");
   themeBtn.setAttribute("aria-pressed", dark ? "true" : "false");
   themeSwitch.classList.toggle("on", dark);
   themeLabel.textContent = dark ? "Тёмная" : "Светлая";
+  if (window.achievkaDesktop) window.achievkaDesktop.setDarkTitle(dark);
 }
 
 themeBtn.addEventListener("click", () => {
   applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 });
-applyTheme(localStorage.getItem("achievka-theme") || "light");
+applyTheme(isTour ? "dark" : localStorage.getItem("achievka-theme") || "dark");
 
-const REMEMBER_KEY = "achievka-user";
+const REMEMBER_KEY = "achievka-profile";
 const gate = document.getElementById("gate");
 const gateForm = document.getElementById("gate-form");
 const gateName = document.getElementById("gate-name");
@@ -499,84 +797,89 @@ const gateToken = document.getElementById("gate-token");
 const gateRemember = document.getElementById("gate-remember");
 const gateError = document.getElementById("gate-error");
 const gateSaved = document.getElementById("gate-saved");
+const gateSubmit = gateForm.querySelector("[type=submit]");
+
+function gateFailure(error) {
+  gateError.hidden = false;
+  gateError.textContent = error.message;
+}
 
 function openGate() {
   gate.hidden = false;
   gateError.hidden = true;
-  loadSavedAccounts();
-}
-
-function closeGate() {
-  gate.hidden = true;
+  loadSavedAccounts().catch(gateFailure);
 }
 
 async function loadSavedAccounts() {
-  const response = await fetch("/api/accounts");
-  const data = await response.json();
+  const data = await api("/api/accounts");
   gateSaved.replaceChildren();
-  if (!data.accounts || !data.accounts.length) return;
+  if (!data.accounts.length) return;
   gateSaved.append(el("p", "muted", "На этом компьютере"));
-  data.accounts.forEach((account) => {
+  for (const account of data.accounts) {
     const button = el("button", "gate-account", account.name);
     button.type = "button";
-    button.addEventListener("click", () => {
-      gateName.value = account.name;
-      gateToken.value = account.token;
-      gateError.hidden = true;
-    });
+    button.addEventListener("click", () => submitLogin({ profile: account.id }));
     gateSaved.append(button);
-  });
+  }
 }
 
-async function login(name, token, remember) {
-  const response = await fetch("/api/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, token })
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Не удалось войти");
-  }
-  if (remember) localStorage.setItem(REMEMBER_KEY, data.apiToken);
+async function login(body, remember) {
+  const data = await api("/api/login", "POST", body);
+  if (remember) localStorage.setItem(REMEMBER_KEY, data.profileId);
   else localStorage.removeItem(REMEMBER_KEY);
-  signature = "";
   apply(data);
-  closeGate();
+  gate.hidden = true;
+}
+
+async function submitLogin(body) {
+  if (gateSubmit.disabled) return;
+  gateSubmit.disabled = true;
+  gateError.hidden = true;
+  try {
+    await login(body, gateRemember.checked);
+  } catch (error) {
+    gateFailure(error);
+  } finally {
+    gateSubmit.disabled = false;
+  }
 }
 
 async function logout() {
-  localStorage.removeItem(REMEMBER_KEY);
-  menuPanel.hidden = true;
-  await fetch("/api/logout", { method: "POST" });
-  state = null;
-  signature = "";
-  helloEl.textContent = "Привет";
-  avatarEl.textContent = "А";
-  gateName.value = "";
-  gateToken.value = "";
-  openGate();
-}
-
-gateForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  gateError.hidden = true;
-  login(gateName.value.trim(), gateToken.value.trim(), gateRemember.checked).catch((error) => {
-    gateError.hidden = false;
-    gateError.textContent = error.message;
-  });
-});
-
-const remembered = localStorage.getItem(REMEMBER_KEY);
-if (remembered) {
-  login("", remembered, true).catch(() => {
+  await mutate(async () => {
+    await api("/api/logout", "POST");
     localStorage.removeItem(REMEMBER_KEY);
+    menuVisibility(false);
+    courseDraft = {url:"",title:""};
+    importPreview = null;
+    coursesSignature = "";
+    state = null;
+    signature = "";
+    snapshotDraft = "";
+    helloEl.textContent = "Привет";
+    avatarEl.textContent = "А";
+    gateName.value = "";
+    gateToken.value = "";
     openGate();
   });
+}
+
+gateForm.addEventListener("submit", event => {
+  event.preventDefault();
+  submitLogin({ name: gateName.value.trim(), token: gateToken.value.trim() });
+});
+
+if (!isTour) {
+const remembered = localStorage.getItem(REMEMBER_KEY);
+if (remembered) {
+  gateSubmit.disabled = true;
+  login({ profile: remembered }, true).catch(() => {
+    localStorage.removeItem(REMEMBER_KEY);
+    openGate();
+  }).finally(() => { gateSubmit.disabled = false; });
 } else {
   openGate();
 }
 setInterval(() => {
-  if (!gate.hidden) return;
-  load().catch(() => {});
+  if (gate.hidden) load().catch(() => {});
 }, 2000);
+}

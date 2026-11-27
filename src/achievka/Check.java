@@ -7,7 +7,7 @@ import java.util.List;
 /** Проверка правил на сохранённой копии курса. Запуск: java -cp out achievka.Check */
 public final class Check {
     public static void main(String[] args) throws Exception {
-        String js = Files.readString(Path.of("web", "fallback-course.js"));
+        String js = Files.readString(Path.of("course-site", "course-data.js"));
         Course course = CourseScanner.parse(js, true, "тест");
         expect(course.tasks().size() == 15, "15 заданий");
         expect(course.xpMax() == 235, "235 XP, а вышло " + course.xpMax());
@@ -19,6 +19,13 @@ public final class Check {
         expect(countDone(empty) == 0, "на пустом курсе знаков нет");
         expect(empty.nextStep().id() == 1, "следующий шаг — 1");
         expect(allHaveCondition(empty), "у каждого знака есть условие");
+        expect(!isDone(Engine.evaluate(new Course("Пустой", "", "", List.of(), false, ""), List.of()), "buddy-amethyst"),
+            "курс без заданий не открывает дракона");
+        var outOfOrder = Engine.evaluate(course, List.of(5, 5, 99));
+        expect(isDone(outOfOrder, "buddy-ember") && !isDone(outOfOrder, "buddy-luna"), "любая сдача открывает лиса");
+        expect(!isDone(Engine.evaluate(course, ids(course).subList(0, 7)), "buddy-luna"), "семь из пятнадцати меньше половины");
+        expect(isDone(Engine.evaluate(course, ids(course).subList(0, 8)), "buddy-luna"), "восемь из пятнадцати открывают мотылька");
+        expect(!isDone(Engine.evaluate(course, ids(course).subList(0, 14)), "buddy-amethyst"), "дракон ждёт финиша");
 
         Engine.Snapshot first = Engine.evaluate(course, List.of(1));
         expect(isDone(first, "first-step"), "первый шаг");
@@ -45,12 +52,23 @@ public final class Check {
         expect(isDone(all, "course-done"), "курс пройден");
         expect(isDone(all, "practice-all"), "все практики");
         expect(isDone(all, "summary"), "сводка");
+        expect(Engine.companionUnlocked(all, "buddy-amethyst"), "весь курс открывает дракона");
         expect(all.xp() == 235, "полный опыт");
         expect(all.nextStep() == null, "шагов не осталось");
         expect(!all.summary().contains("место"), "в сводке нет места в группе");
 
         Engine.Snapshot junk = Engine.evaluate(course, List.of(99, 1, 1));
         expect(junk.xp() == 10, "чужой номер не даёт опыт");
+        String sample = "{id:1,title:'One',module:'A',type:'text',reward:10}";
+        try {
+            CourseScanner.parse("{tasks:[" + sample + "," + sample + "]}", true, "");
+            throw new IllegalStateException("два одинаковых ID приняты");
+        } catch (CourseScanner.ScanException expected) {
+            // The entire import must be rejected.
+        }
+        var zeroLast = CourseScanner.parse("{tasks:[" + sample + ",{id:2,title:'Two',module:'A',type:'text',reward:0}]}", true, "");
+        expect(!Engine.evaluate(zeroLast, List.of(1)).levelName().equals("Курс пройден"), "нулевой XP не завершает курс раньше срока");
+        expect(Engine.evaluate(zeroLast, List.of(1,2)).levelName().equals("Курс пройден"), "завершение по всем заданиям");
         System.out.println("Проверка правил прошла");
     }
 

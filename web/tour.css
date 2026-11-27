@@ -1,0 +1,52 @@
+.tour-launch { display:flex; align-items:center; justify-content:center; gap:9px; padding:9px 12px; border-radius:10px; border:1px solid var(--border); background:var(--accent-soft); color:var(--accent); font-size:13px; font-weight:700; }
+.tour-launch:hover { border-color:var(--accent); }
+.tour-launch span { font-size:11px; }
+.side .tour-launch { margin-top:20px; }
+.tour-open { overflow:hidden; }
+.tour-frame { position:fixed; inset:0; z-index:100; width:100%; height:100%; border:0; background:#100e17; }
+.tour-mode { --tour-rail:134px; overflow:hidden; background:#100e17; }
+.tour-stage,.tour-poster,.tour-shield { position:fixed; top:0; right:0; left:0; bottom:var(--tour-rail); }
+.tour-stage { z-index:0; overflow:auto; background:var(--bg); scrollbar-width:none; }
+.tour-stage::-webkit-scrollbar { display:none; }
+.tour-stage .shell { min-height:100%; }
+.tour-stage .side { height:calc(100vh - var(--tour-rail)); }
+.tour-stage [data-tour-launch] { display:none; }
+.tour-stage .gate { position:absolute; }
+.tour-stage .gate-card { grid-gap:8px; }
+.tour-stage .workspace { padding-bottom:24px; }
+.tour-mode .tour-stage { pointer-events:none; }
+.tour-shield { z-index:3; }
+.tour-ring { z-index:4; position:fixed; pointer-events:none; border:2px solid #cbb0ff; border-radius:12px; box-shadow:0 0 0 4px #ac7fff32,0 0 0 220vmax rgba(12,8,23,.29); transition:left .28s ease,top .28s ease,width .28s ease,height .28s ease; }
+.tour-tag { position:fixed; z-index:5; max-width:85vw; border-radius:6px; padding:3px 10px; font-size:12px; font-weight:750; color:#291646; background:#ddcaff; pointer-events:none; }
+.tour-poster { color:#fcf9ff; display:flex; align-items:center; overflow:hidden; background:linear-gradient(90deg,#140f22 2%,rgba(26,17,43,.95) 25%,rgba(25,17,38,.38) 66%,rgba(20,12,28,.16)),url("/quest-portal.png") center 49% /cover; }
+.tour-poster-copy { position:relative; z-index:1; margin:0 7.5%; max-width:62%; }
+.tour-kicker { color:#d1b6ff; font-size:12px; font-weight:750; line-height:1.4; letter-spacing:.13em; text-transform:uppercase; }
+.tour-poster h1 { white-space:pre-line; font-size:clamp(45px,6.3vw,94px); line-height:1; letter-spacing:-.055em; margin:22px 0 18px; }
+.tour-poster .tour-sub { color:#e0d4ed; font-size:20px; }
+.tour-poster img { display:none; }
+.tour-victory img { display:block; position:absolute; right:7%; width:min(35vw,390px); filter:drop-shadow(0 14px 23px #160b2f); animation:tour-float 3s ease-in-out infinite alternate; }
+.tour-bar { position:fixed; z-index:8; left:0; right:0; bottom:0; height:var(--tour-rail); padding:8px clamp(20px,4vw,64px) 12px; background:#191421; color:#fbf8ff; border-top:1px solid #514462; }
+.tour-progress { display:flex; gap:4px; height:15px; align-items:center; }
+.tour-progress button { position:relative; flex:1; min-width:0; height:14px; background:transparent; border:0; padding:0; }
+.tour-progress button::before,.tour-progress i { position:absolute; left:0; top:6px; width:100%; height:3px; border-radius:2px; }
+.tour-progress button::before { content:""; background:#493e55; }
+.tour-progress i { background:#c6a4ff; transform-origin:left; transform:scaleX(0); }
+.tour-progress button:hover::before { background:#87769c; }
+.tour-row { height:calc(100% - 15px); display:flex; align-items:center; justify-content:space-between; gap:24px; }
+.tour-copy { max-width:940px; }
+.tour-copy h2 { margin:4px 0; font-size:clamp(21px,2.2vw,36px); line-height:1.12; letter-spacing:-.03em; }
+.tour-copy .tour-sub { color:#ddd4e7; font-size:clamp(13px,1.25vw,19px); line-height:1.35; }
+.tour-controls { flex:none; text-align:right; }
+.tour-time { font-size:12px; color:#b5a9c3; font-variant-numeric:tabular-nums; margin-bottom:5px; }
+.tour-buttons { display:flex; gap:5px; }
+.tour-buttons button { width:34px; height:34px; border-radius:9px; border:1px solid #56485f; background:#2b2334; font-size:20px; line-height:1; color:#f2eafa; }
+.tour-buttons button:nth-child(2) { color:#241735; background:#ccb0f6; border-color:#ccb0f6; }
+.tour-buttons button:disabled { opacity:.3; }
+.tour-buttons button:hover { border-color:#dbc2ff; }
+.tour-clean .tour-controls { opacity:0; }
+.tour-clean .tour-controls:hover { opacity:1; }
+.tour-clean .tour-copy { max-width:calc(100% - 10px); }
+@keyframes tour-float { from {transform:translateY(1%)} to {transform:translateY(-2%)} }
+@media(max-height:630px) { .tour-mode { --tour-rail:112px; } .tour-stage .nav { margin-top:12px; } .tour-stage .nav-btn { min-height:34px; } }
+@media(max-width:790px) { .tour-stage .side { height:auto; } .side .tour-launch { margin:0; } .tour-mode { --tour-rail:155px; } .tour-copy .tour-sub { font-size:13px; } .tour-row { gap:9px; } }
+@media(prefers-reduced-motion:reduce) { .tour-ring,.tour-poster img { animation:none; transition:none; } }

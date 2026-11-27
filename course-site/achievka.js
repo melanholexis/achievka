@@ -1,113 +1,158 @@
 (function () {
-  if (window.__achievkaBridge) return;
-  window.__achievkaBridge = true;
+  const theme = new URLSearchParams(location.search).get("theme");
+  if (theme === "light" || theme === "dark") sessionStorage.setItem("achievka-course-theme", theme);
+  document.documentElement.dataset.theme = sessionStorage.getItem("achievka-course-theme") || "dark";
+  if (location.hostname !== "127.0.0.1" || !location.pathname.startsWith("/course/")) return;
+  localStorage.removeItem("achievka-user");
+  localStorage.removeItem("achievka_token");
 
-  var GAME = "pystart_game_v1";
-  var TOKEN = "achievka_token";
-  var NONCE = "achievka_nonce";
-  var APP = (location.hostname === "127.0.0.1" || location.hostname === "localhost")
-    ? location.origin
-    : "http://127.0.0.1:8741";
-
-  var statusEl = null;
-
-  function setStatus(text) {
-    if (statusEl) statusEl.textContent = text;
+  const parameters = new URLSearchParams(location.hash.slice(1));
+  const supplied = parameters.get("achievka");
+  const profile = parameters.get("profile");
+  const initialNonce = Number(parameters.get("version"));
+  if (/^[a-f0-9]{64}$/.test(supplied) && /^[a-f0-9]{64}$/.test(profile)) {
+    sessionStorage.setItem("achievka-course-token", supplied);
+    sessionStorage.setItem("achievka-course-profile", profile);
+    history.replaceState(null, "", location.pathname + location.search);
   }
+  const token = sessionStorage.getItem("achievka-course-token");
+  const account = sessionStorage.getItem("achievka-course-profile");
+  if (!token || !account) return;
 
-  function gameRaw() {
+  const legacyKey = "pystart_game_v1";
+  const prefix = legacyKey + ":" + account + ":";
+  const versionKey = prefix + "reset";
+  const savedNonce = Number(localStorage.getItem(versionKey)) || 0;
+  let resetNonce = Number.isSafeInteger(initialNonce) ? Math.max(savedNonce, initialNonce) : savedNonce;
+  let working = false;
+  let pending = false;
+  let ready = false;
+  let stopped = false;
+  let status;
+  let legacyButton;
+  let timer;
+  let refreshAfter = 0;
+
+  function read(key) {
     try {
-      return localStorage.getItem(GAME) || "{}";
-    } catch (e) {
-      return "{}";
+      const state = JSON.parse(localStorage.getItem(key) || "{}");
+      return state && typeof state === "object" && !Array.isArray(state) ? state : {};
+    } catch {
+      return {};
     }
   }
 
-  function send() {
-    var token = localStorage.getItem(TOKEN);
-    if (!token) return Promise.resolve();
-    return fetch(APP + "/api/v1/progress", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + token
-      },
-      body: gameRaw()
-    }).then(function (response) {
-      return response.json();
-    }).then(function (data) {
-      if (!data || data.ok !== true) throw new Error("reject");
-      var seen = localStorage.getItem(NONCE);
-      if (seen !== null && String(data.resetNonce) !== seen) {
-        localStorage.removeItem(GAME);
-        localStorage.setItem(NONCE, String(data.resetNonce));
-        return send();
+  function gameKey() {
+    return prefix + resetNonce;
+  }
+
+  function ids(state) {
+    return Array.isArray(state.solved)
+      ? [...new Set(state.solved.filter(id => Number.isSafeInteger(id) && id > 0))]
+      : [];
+  }
+
+  const roomFields = ["coins", "totalEarned", "purchasedCount", "doubleUntil", "avatar", "characterName", "inventory", "answers"];
+  function roomOf(state) {
+    const room = {};
+    for (const key of roomFields) if (state[key] !== undefined) room[key] = state[key];
+    return Object.keys(room).length ? JSON.stringify(room) : "";
+  }
+
+  function apply(remote, sentRoom) {
+    if (remote.resetNonce < resetNonce) return;
+    const oldKey = gameKey();
+    const reset = resetNonce !== remote.resetNonce;
+    resetNonce = remote.resetNonce;
+    localStorage.setItem(versionKey, String(resetNonce));
+    if (reset) localStorage.removeItem(oldKey);
+    const current = read(gameKey());
+    const currentIds = ids(current);
+    const solved = [...new Set([...remote.solved, ...currentIds])];
+    const localRoom = roomOf(current);
+    const baseKey = gameKey() + ":room-base";
+    const base = localStorage.getItem(baseKey) || "";
+    const serverRoom = remote.room || "";
+    const acceptRoom = serverRoom !== base && !(sentRoom === serverRoom && localRoom !== sentRoom);
+    if (acceptRoom) {
+      for (const key of roomFields) delete current[key];
+      Object.assign(current, JSON.parse(serverRoom || "{}"));
+    }
+    localStorage.setItem(baseKey, serverRoom);
+    const changed = acceptRoom || solved.length !== currentIds.length || solved.some((id, index) => currentIds[index] !== id);
+    if (changed) localStorage.setItem(gameKey(), JSON.stringify({ ...current, solved }));
+    pending = solved.length > remote.solved.length || roomOf(current) !== serverRoom;
+    if (reset || changed) window.dispatchEvent(new Event("achievka:updated"));
+    if (legacyButton) legacyButton.hidden = resetNonce !== 0 || ids(read(legacyKey)).length === 0;
+    status.textContent = pending ? "Ачивка · сохраняем изменения комнаты и заданий…" :
+      "Ачивка · комната сохранена, синхронизировано заданий: " + remote.solved.length;
+  }
+
+  async function sync(forceRead = false) {
+    if (!status || stopped || working || (!pending && !forceRead && Date.now() < refreshAfter)) return;
+    working = true;
+    const sendProgress = ready && pending;
+    try {
+      const headers = { "Authorization": "Bearer " + token };
+      let options = { headers };
+      let sentRoom;
+      if (sendProgress) {
+        const current = read(gameKey());
+        sentRoom = roomOf(current);
+        headers["Content-Type"] = "application/json";
+        options = { method: "POST", headers, body: JSON.stringify({
+          resetNonce, solved: ids(current), room: sentRoom, roomBase: localStorage.getItem(gameKey() + ":room-base") || ""
+        }) };
       }
-      if (data.resetNonce != null) localStorage.setItem(NONCE, String(data.resetNonce));
-      var solved = 0;
-      try { solved = (JSON.parse(gameRaw()).solved || []).length; } catch (e) {}
-      setStatus("Ключ " + token + " принят. Сдано заданий: " + solved + ".");
-    }).catch(function () {
-      setStatus("Ачивка не запущена. Открой Achievka.exe и нажми «Получить ключ» ещё раз.");
-    });
-  }
-
-  function register(name) {
-    var token = localStorage.getItem(TOKEN) || "";
-    return fetch(APP + "/api/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name, token: token })
-    }).then(function (response) {
-      return response.json();
-    }).then(function (data) {
-      if (!data || !data.token) throw new Error("no token");
-      localStorage.setItem(TOKEN, data.token);
-      return send();
-    });
-  }
-
-  function mount() {
-    var bar = document.createElement("div");
-    bar.style.cssText = "position:sticky;top:0;z-index:9999;display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#ffe56a;color:#111;border-bottom:2px solid #111;padding:8px 16px;font:600 14px/1.3 Segoe UI,sans-serif;";
-    var title = document.createElement("strong");
-    title.textContent = "Ачивка";
-    var input = document.createElement("input");
-    input.placeholder = "Имя";
-    input.maxLength = 40;
-    input.style.cssText = "border:2px solid #111;padding:6px 8px;font:600 14px Segoe UI,sans-serif;";
-    var button = document.createElement("button");
-    button.type = "button";
-    button.textContent = "Получить ключ";
-    button.style.cssText = "border:2px solid #111;background:#fff;padding:6px 10px;font:700 14px Segoe UI,sans-serif;cursor:pointer;";
-    statusEl = document.createElement("span");
-    button.addEventListener("click", function () {
-      var name = input.value.trim();
-      if (!name) {
-        setStatus("Впиши имя.");
+      const response = await fetch("/api/v1/progress", options);
+      if (response.status === 401 || response.status === 403) {
+        status.textContent = "Открой курс заново из Ачивки, чтобы подключить синхронизацию.";
+        stopped = true;
+        clearInterval(timer);
         return;
       }
-      setStatus("Соединяюсь…");
-      register(name).catch(function () {
-        setStatus("Ачивка не запущена. Открой Achievka.exe и нажми ещё раз.");
-      });
-    });
-    if (localStorage.getItem(TOKEN)) {
-      setStatus("Ключ " + localStorage.getItem(TOKEN) + ". Отправляю уже сданные задания…");
-      send();
-    } else {
-      setStatus("Впиши имя. Уже сданные задания уйдут в опыт вместе с ключом.");
+      if (!response.ok && response.status !== 409) throw new Error("Ошибка синхронизации");
+      apply(await response.json(), sentRoom);
+      ready = true;
+      refreshAfter = Date.now() + 4000;
+    } catch {
+      status.textContent = "Связь с Ачивкой прервалась. Задания сохранены в этом окне курса.";
+    } finally {
+      working = false;
     }
-    bar.append(title, input, button, statusEl);
-    document.body.prepend(bar);
   }
 
-  var original = localStorage.setItem.bind(localStorage);
-  localStorage.setItem = function (key, value) {
-    original(key, value);
-    if (key === GAME) send();
+  window.AchievkaCourse = {
+    read: () => read(gameKey()),
+    save(state) {
+      const solved = [...new Set([...ids(read(gameKey())), ...ids(state)])];
+      localStorage.setItem(gameKey(), JSON.stringify({ ...state, solved }));
+      pending = true;
+      if (status) status.textContent = "Ачивка · сохраняем изменения…";
+      void sync();
+    }
   };
 
-  if (document.body) mount();
-  else document.addEventListener("DOMContentLoaded", mount);
+  document.addEventListener("DOMContentLoaded", () => {
+    const bar = document.createElement("div");
+    bar.className = "sync-bar";
+    status = document.createElement("span");
+    status.setAttribute("role", "status");
+    status.textContent = "Ачивка · подключение…";
+    legacyButton = document.createElement("button");
+    legacyButton.type = "button";
+    legacyButton.textContent = "Перенести старое сохранение";
+    legacyButton.hidden = true;
+    legacyButton.addEventListener("click", () => {
+      if (!ready || resetNonce !== 0 || !confirm("Добавить задания из старого сохранения в текущий профиль?")) return;
+      const current = read(gameKey());
+      const solved = [...new Set([...ids(current), ...ids(read(legacyKey))])];
+      window.AchievkaCourse.save({ ...current, solved });
+      window.dispatchEvent(new Event("achievka:updated"));
+    });
+    bar.append(status, legacyButton);
+    document.body.prepend(bar);
+    timer = setInterval(() => void sync(), 1000);
+    void sync(true);
+  });
 })();

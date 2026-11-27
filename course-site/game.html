@@ -346,8 +346,9 @@
     .hero-info h1 { font-size: 24px; }
   }
 </style>
+<link rel="stylesheet" href="theme.css">
 </head>
-<body>
+<body class="game-page">
 
 <header>
   <div class="logo">🏰 Комната героя</div>
@@ -432,6 +433,7 @@
 
 </div>
 
+<script src="achievka.js"></script>
 <script src="course-data.js"></script>
 <script>
 /* ============================================================
@@ -454,7 +456,7 @@ function defaultState() {
 
 function loadState() {
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+    const saved = window.AchievkaCourse ? window.AchievkaCourse.read() : JSON.parse(localStorage.getItem(KEY) || '{}');
     return { ...defaultState(), ...saved };
   } catch { return defaultState(); }
 }
@@ -462,7 +464,8 @@ function loadState() {
 let state = loadState();
 
 function saveState() {
-  localStorage.setItem(KEY, JSON.stringify(state));
+  if (window.AchievkaCourse) window.AchievkaCourse.save(state);
+  else localStorage.setItem(KEY, JSON.stringify(state));
 }
 
 /* ============================================================
@@ -603,6 +606,10 @@ function renderShop() {
 function buyItem(id) {
   const item = SHOP_ITEMS.find(i => i.id === id);
   if (!item) return;
+  if (id === 'skip' && window.AchievkaCourse) {
+    toast('Чтобы получить достижение, сдай задание в курсе.', 'error');
+    return;
+  }
 
   if (state.coins < item.price) {
     toast('❌ Недостаточно монет', 'error');
@@ -615,6 +622,11 @@ function buyItem(id) {
     return;
   }
 
+  let newName;
+  if (id === 'rename') {
+    newName = prompt('Как назвать героя?', state.characterName)?.trim().slice(0, 20);
+    if (!newName || newName === state.characterName) return;
+  }
   // Списываем монеты
   state.coins -= item.price;
 
@@ -627,11 +639,8 @@ function buyItem(id) {
     toast(`✅ Новый титул: ${item.title}`, 'success');
   } else if (item.type === 'boost') {
     if (id === 'rename') {
-      const newName = prompt('Как назвать героя?', state.characterName);
-      if (newName && newName.trim()) {
-        state.characterName = newName.trim().slice(0, 20);
-        toast(`✅ Имя изменено на "${state.characterName}"`, 'success');
-      }
+      state.characterName = newName;
+      toast("Имя героя изменено.", 'success');
     } else if (id === 'double') {
       state.doubleUntil = Date.now() + 3600 * 1000;
       toast('✨ Двойные монеты активны 1 час!', 'success');
@@ -747,10 +756,12 @@ document.querySelectorAll('.tab').forEach(tab => {
 render();
 
 // Слушаем изменения в localStorage (если открыто в другой вкладке)
-window.addEventListener('storage', () => {
+function refreshSavedProgress() {
   state = loadState();
   render();
-});
+}
+window.addEventListener('storage', refreshSavedProgress);
+window.addEventListener('achievka:updated', refreshSavedProgress);
 
 // Обновляем каждые 5 сек — на случай, если пользователь
 // решал задания в другой вкладке
@@ -763,6 +774,5 @@ setInterval(() => {
 }, 5000);
 </script>
 
-<script src="achievka.js"></script>
 </body>
 </html>

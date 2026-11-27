@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
- <a href="game.html" class="mini-link">Перейти в парсер</a>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Python с нуля — онлайн-курс</title>
@@ -186,12 +185,14 @@
     .container { padding: 20px 12px; }
   }
 </style>
+<link rel="stylesheet" href="theme.css">
 </head>
-<body>
+<body class="lesson-page">
 
 <header>
   <div class="logo">🐍 Python с нуля</div>
   <div class="header-right">
+    <a href="game.html" class="mini-link">Комната героя</a>
     <div class="avatar" id="avatar">🧑‍💻</div>
   </div>
 </header>
@@ -229,7 +230,9 @@
   </div>
 </div>
 
+<script src="achievka.js"></script>
 <script src="course-data.js"></script>
+<script src="python-exercises.js"></script>
 <script>
 /* ============================================================
    💾 СОСТОЯНИЕ — общий ключ с game.html (pystart_game_v1)
@@ -252,13 +255,14 @@ function defaultState() {
 
 function loadState() {
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+    const saved = window.AchievkaCourse ? window.AchievkaCourse.read() : JSON.parse(localStorage.getItem(KEY) || '{}');
     return { ...defaultState(), ...saved };
   } catch { return defaultState(); }
 }
 
 function saveState() {
-  localStorage.setItem(KEY, JSON.stringify(state));
+  if (window.AchievkaCourse) window.AchievkaCourse.save(state);
+  else localStorage.setItem(KEY, JSON.stringify(state));
 }
 
 let state = loadState();
@@ -270,28 +274,12 @@ let userAnswers = state.answers;
 ============================================================ */
 const TASKS = (window.COURSE_DATA && window.COURSE_DATA.tasks) || [];
 
-/* ============================================================
-   🐍 ПРОВЕРКА КОДА
-============================================================ */
-function runPythonLite(code, expected) {
-  try {
-    const outputs = [];
-    const fakePrint = (v) => outputs.push(String(v));
-    const patched = code.replace(/\bprint\s*\(/g, '__print(');
-    // eslint-disable-next-line no-new-func
-    const fn = new Function('__print', 'len', 'range', patched);
-    fn(fakePrint, (x) => x.length, (...args) => {
-      const [start, stop, step] = args.length === 1 ? [0, args[0], 1] : args;
-      const r = [];
-      for (let i = start; i < stop; i += step) r.push(i);
-      return r;
-    });
-    const got = outputs.join(',');
-    return { ok: got === expected, outputs, expected };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-}
+const legacyCodeChecks = {
+  5: { output: ['12'] },
+  8: { output: ['13'] },
+  12: { output: ['16'], kind: 'square' },
+  15: { output: ['0', '2', '4', '6'], kind: 'loop' }
+};
 
 /* ============================================================
    💾 СОХРАНЕНИЕ
@@ -306,7 +294,9 @@ function save() {
    🎨 РЕНДЕР
 ============================================================ */
 let currentFilter = 'all';
-let openTaskId = null;
+const requestedTask = Number(new URLSearchParams(location.search).get("task"));
+let openTaskId = TASKS.some(task => task.id === requestedTask) ? requestedTask : null;
+const retrying = new Set();
 
 function render() {
   const list = document.getElementById('taskList');
@@ -345,7 +335,7 @@ function render() {
         <div class="arrow">›</div>
       </div>
       <div class="task-content">
-        <div class="content-inner">${renderTaskBody(task, isDone)}</div>
+        <div class="content-inner">${renderTaskBody(task, isDone && !retrying.has(task.id))}</div>
       </div>
     `;
 
@@ -389,7 +379,7 @@ function renderTaskBody(task, isDone) {
   if (task.type === 'text') {
     return `
       <div class="question">${task.question}</div>
-      <input class="input-answer" type="text" placeholder="Введи ответ..." value="${savedAns || ''}">
+      <input class="input-answer" type="text" placeholder="Введи ответ..." value="${escapeAnswer(savedAns)}">
       <div class="actions">
         <button class="btn-check" data-action="check">Проверить</button>
       </div>
@@ -400,14 +390,18 @@ function renderTaskBody(task, isDone) {
   if (task.type === 'code') {
     return `
       <div class="question">${task.question}</div>
-      <div class="code-hint">💡 Пиши код на Python. Он выполнится в песочнице — с твоим компьютером ничего не случится.</div>
-      <textarea class="code-editor" spellcheck="false">${savedAns || task.starter || ''}</textarea>
+      <div class="code-hint">Проверка поддерживает выражения, переменные, функции и циклы из этого курса.</div>
+      <textarea class="code-editor" spellcheck="false">${escapeAnswer(savedAns || task.starter)}</textarea>
       <div class="actions">
         <button class="btn-check" data-action="check">▶ Запустить и проверить</button>
       </div>
       <div class="result"></div>
     `;
   }
+}
+
+function escapeAnswer(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 }
 
 function attachTaskHandlers(task) {
@@ -451,7 +445,8 @@ function attachTaskHandlers(task) {
   const resetBtn = root.querySelector('[data-action="reset"]');
   if (resetBtn) {
     resetBtn.addEventListener('click', () => {
-      solved = solved.filter(x => x !== task.id);
+      if (window.AchievkaCourse) retrying.add(task.id);
+      else solved = solved.filter(x => x !== task.id);
       delete userAnswers[task.id];
       delete userAnswers[task.id + '_choice'];
       save();
@@ -496,7 +491,10 @@ function checkAnswer(task) {
       message = '✗ Введи код.';
       ok = false;
     } else {
-      const res = task.validate(code);
+      const check = task.codeCheck || legacyCodeChecks[task.id];
+      const res = check
+        ? window.checkPythonExercise(code, check.output, check.kind)
+        : { ok: false, error: 'Для этого задания нет условий проверки.' };
       ok = res.ok;
       if (ok) message = '✓ Код выполнен верно! ' + (task.explain || '');
       else if (res.error) message = '✗ Ошибка: ' + res.error;
@@ -510,13 +508,15 @@ function checkAnswer(task) {
   resultEl.className = 'result show ' + (ok ? 'success' : 'error');
   resultEl.textContent = message;
 
+  if (ok && retrying.delete(task.id)) setTimeout(render, 1200);
   if (ok && !solved.includes(task.id)) {
     solved.push(task.id);
 
     // 💰 Тихо начисляем монеты (для game.html), но НЕ показываем
     const reward = task.reward || 10;
-    state.coins = (state.coins || 0) + reward;
-    state.totalEarned = (state.totalEarned || 0) + reward;
+    const coins = state.doubleUntil > Date.now() ? reward * 2 : reward;
+    state.coins = (state.coins || 0) + coins;
+    state.totalEarned = (state.totalEarned || 0) + coins;
 
     save();
     setTimeout(() => render(), 1200);
@@ -558,12 +558,14 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 /* ============================================================
    🔁 СИНХРОНИЗАЦИЯ (если game.html открыт в другой вкладке)
 ============================================================ */
-window.addEventListener('storage', () => {
+function refreshSavedProgress() {
   state = loadState();
   solved = state.solved;
   userAnswers = state.answers;
   render();
-});
+}
+window.addEventListener('storage', refreshSavedProgress);
+window.addEventListener('achievka:updated', refreshSavedProgress);
 
 /* ============================================================
    🚀 СТАРТ
@@ -573,9 +575,11 @@ if (TASKS.length === 0) {
     '<div class="empty"><div class="icon">⚠️</div><p>Не найден файл course-data.js. Проверь, что он лежит рядом.</p></div>';
 } else {
   render();
+  if (openTaskId !== null) {
+    requestAnimationFrame(() => document.querySelector('.task[data-id="' + openTaskId + '"]').scrollIntoView({block: 'start'}));
+  }
 }
 </script>
 
-<script src="achievka.js"></script>
 </body>
 </html>

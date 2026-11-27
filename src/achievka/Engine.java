@@ -29,7 +29,7 @@ public final class Engine {
             xp += course.byId(id).reward();
         }
         int xpMax = course.xpMax();
-        Level level = level(xp, xpMax);
+        Level level = level(xp, xpMax, !course.tasks().isEmpty() && solved.size() == course.tasks().size());
 
         Map<String, List<Task>> modules = new LinkedHashMap<>();
         List<Task> codeTasks = new ArrayList<>();
@@ -78,7 +78,7 @@ public final class Engine {
             solved
         ));
 
-        List<Mark> rewards = rewards(solved, achievements, order);
+        List<Mark> rewards = rewards(solved, achievements, order, course.tasks().size());
         String summary = summary(course, solved, xp, xpMax, level.name());
         return new Snapshot(
             xp,
@@ -94,8 +94,11 @@ public final class Engine {
         );
     }
 
-    private static List<Mark> rewards(List<Integer> solved, List<Mark> achievements, Order order) {
+    private static List<Mark> rewards(List<Integer> solved, List<Mark> achievements, Order order, int total) {
         List<Mark> rewards = new ArrayList<>();
+        rewards.add(companion("buddy-ember", "Искрик", "Сдай любое задание курса.", solved.size(), 1, total));
+        rewards.add(companion("buddy-luna", "Лунница", "Пройди половину курса.", solved.size(), (total + 1) / 2, total));
+        rewards.add(companion("buddy-amethyst", "Аметист", "Заверши все задания курса.", solved.size(), total, total));
         rewards.add(new Mark(
             "title-student",
             "Титул «Ученик»",
@@ -141,6 +144,15 @@ public final class Engine {
         return rewards;
     }
 
+    private static Mark companion(String id, String name, String condition, int solved, int target, int total) {
+        String detail = total == 0 ? "В курсе пока нет заданий" : "Сдано " + Math.min(solved, target) + " из " + target;
+        return new Mark(id, name, condition, detail, total > 0 && solved >= target, 0);
+    }
+
+    static boolean companionUnlocked(Snapshot snapshot, String id) {
+        return id.startsWith("buddy-") && snapshot.rewards().stream().anyMatch(mark -> mark.id().equals(id) && mark.done());
+    }
+
     private static String summary(Course course, List<Integer> solved, int xp, int xpMax, String level) {
         StringBuilder text = new StringBuilder();
         text.append("Ачивка. Курс «").append(course.title()).append("».\n");
@@ -154,7 +166,7 @@ public final class Engine {
                 text.append("\n").append(currentModule).append("\n");
             }
             text.append(contains(solved, task.id()) ? "сдано" : "ещё нет");
-            text.append("  ").append(task.id()).append(". ").append(task.title()).append("\n");
+            text.append("  ").append(task.title()).append("\n");
         }
         return text.toString().strip();
     }
@@ -170,7 +182,7 @@ public final class Engine {
         return new Mark(
             id,
             title,
-            "Сдать задание " + task.id() + ": " + sentence(task.title()),
+            "Сдать задание «" + task.title() + "».",
             task.module() + " · " + task.typeLabel() + " · " + task.reward() + " XP",
             done,
             task.reward()
@@ -189,7 +201,7 @@ public final class Engine {
             if (names.length() > 0) {
                 names.append("; ");
             }
-            names.append(task.id()).append(". ").append(task.title());
+            names.append(task.title());
             xp += task.reward();
             if (contains(solved, task.id())) {
                 closed++;
@@ -254,8 +266,8 @@ public final class Engine {
                 return new Order(
                     false,
                     prefix,
-                    "Порядок сбит на шаге " + (i + 1) + ": ожидалось задание " + expected.id()
-                        + ", а закрыто " + solved.get(i) + ". Сбрось более позднее задание на сайте и сдай пропущенное."
+                    "На шаге " + (i + 1) + " ожидалось «" + expected.title()
+                        + "», первым закрыто «" + course.byId(solved.get(i)).title() + "»."
                 );
             }
             prefix++;
@@ -268,18 +280,17 @@ public final class Engine {
 
     private record Level(String name, int from, int nextAt, String nextName) {}
 
-    private static Level level(int xp, int xpMax) {
+    private static Level level(int xp, int xpMax, boolean finished) {
         int max = Math.max(xpMax, 1);
         int[] bounds = {0, ceil(max, 0.15), ceil(max, 0.40), ceil(max, 0.70), max};
         String[] names = {"Новичок", "Ученик", "Практикант", "Кодер", "Курс пройден"};
+        if (finished) return new Level(names[4], xpMax, xpMax, null);
         if (xp <= 0) {
             return new Level(names[0], 0, bounds[1], names[1]);
         }
-        if (xp >= max) {
-            return new Level(names[4], max, max, null);
-        }
+
         int index = 0;
-        for (int i = 0; i < bounds.length; i++) {
+        for (int i = 0; i < bounds.length - 1; i++) {
             if (xp >= bounds[i]) {
                 index = i;
             }

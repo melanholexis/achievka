@@ -29,6 +29,13 @@ public final class Notifier {
         }
         Engine.Snapshot snap = Engine.evaluate(course, solved);
         List<Notice> fresh = new ArrayList<>();
+        List<String> companions = snap.rewards().stream()
+            .filter(mark -> mark.id().startsWith("buddy-") && mark.done() && !seenMarks.contains(mark.id()))
+            .map(Mark::title).toList();
+        if (!companions.isEmpty()) {
+            fresh.add(new Notice(companions.size() == 1 ? "Новый спутник" : "Новые спутники",
+                String.join(", ", companions) + " · Открой раздел «Награды»"));
+        }
         for (Mark mark : snap.achievements()) {
             if (!mark.done()) {
                 continue;
@@ -44,7 +51,7 @@ public final class Notifier {
                 }
                 Task task = course.byId(id);
                 if (task != null) {
-                    fresh.add(new Notice("Задание " + id + " сдано", task.title() + "  ·  +" + task.reward() + " XP"));
+                    fresh.add(new Notice("Задание сдано", task.title() + "  ·  +" + task.reward() + " XP"));
                 }
             }
         }
@@ -78,11 +85,14 @@ public final class Notifier {
         if (course == null) {
             return;
         }
-        for (Mark mark : Engine.evaluate(course, solved == null ? List.of() : solved).achievements()) {
+        var snapshot = Engine.evaluate(course, solved == null ? List.of() : solved);
+        for (Mark mark : snapshot.achievements()) {
             if (mark.done()) {
                 seenMarks.add(mark.id());
             }
         }
+        snapshot.rewards().stream().filter(mark -> mark.done() && mark.id().startsWith("buddy-"))
+            .forEach(mark -> seenMarks.add(mark.id()));
     }
 
     private static void publish(Notice notice) {

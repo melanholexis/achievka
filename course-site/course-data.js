@@ -47,7 +47,8 @@ window.COURSE_DATA = {
       time: '10 мин',
       title: 'Напиши программу, которая выводит сумму 5 и 7',
       question: 'Напиши код. Он должен вывести <strong>12</strong> в консоль.',
-      starter: 'print(5 + 7)',
+      codeCheck: { output: ['12'] },
+      starter: '# Выведи сумму 5 и 7',
       hint: 'Используй print() и сложение.',
       explain: 'print(5 + 7) выведет 12.'
     },
@@ -80,7 +81,8 @@ window.COURSE_DATA = {
       time: '10 мин',
       title: 'Выведи длину строки "Hello, world!"',
       question: 'Используй len() и print(), чтобы вывести <strong>13</strong>.',
-      starter: 'text = "Hello, world!"\nprint(len(text))',
+      codeCheck: { output: ['13'] },
+      starter: 'text = "Hello, world!"\n# Выведи длину строки',
       hint: 'len() возвращает количество символов.',
       explain: 'len("Hello, world!") = 13.'
     },
@@ -116,8 +118,9 @@ window.COURSE_DATA = {
       id: 12, module: 'Модуль 5', type: 'code', reward: 25, difficulty: 'hard',
       time: '10 мин',
       title: 'Напиши функцию square(n), возвращающую квадрат числа',
-      question: 'Функция должна вернуть n². Проверка вызовет square(4) и ожидает <strong>16</strong>.',
-      starter: 'def square(n):\n    return n * n\n\nprint(square(4))',
+      question: 'Функция должна вернуть n². Например, square(4) должна вернуть <strong>16</strong>. Проверь также ноль и отрицательные числа.',
+      codeCheck: { output: ['16'], kind: 'square' },
+      starter: 'def square(n):\n    # Верни квадрат аргумента',
       hint: 'n * n или n ** 2.',
       explain: 'return n * n — верное решение.'
     },
@@ -150,7 +153,8 @@ window.COURSE_DATA = {
       time: '10 мин',
       title: 'Финальный проект: выведи чётные числа от 0 до 6',
       question: 'Используй цикл, выведи <strong>по одному числу на строку</strong>: 0, 2, 4, 6.',
-      starter: 'for i in range(0, 7, 2):\n    print(i)',
+      codeCheck: { output: ['0', '2', '4', '6'], kind: 'loop' },
+      starter: '# Выведи чётные числа от 0 до 6 с помощью цикла',
       hint: 'range(0, 7, 2) — третий аргумент это шаг.',
       explain: 'range(0, 7, 2) даёт 0, 2, 4, 6.'
     }

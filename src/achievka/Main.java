@@ -3,588 +3,646 @@ package achievka;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetSocketAddress;
-import java.net.URI;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
 import javafx.application.Application;
 
-/**
- * Локальное приложение «Ачивка».
- * Java сканирует курс на сайте и принимает закрытые шаги.
- * Страница на JS показывает достижения, опыт и награды.
- */
-public final class Main {
-    private static final String SITE = "https://blerebo.github.io";
-    private static final String SKIP_FROM =
-        "} else if (id === 'skip') {\n"
-            + "      const firstUnsolved = (window.COURSE_DATA?.tasks || []).find(t => !state.solved.includes(t.id));\n"
-            + "      if (firstUnsolved) {\n"
-            + "        state.solved.push(firstUnsolved.id);\n"
-            + "        toast(`⏭️ Пропущено: \"${firstUnsolved.title}\"`, 'success');\n"
-            + "      } else {\n"
-            + "        toast('✅ Все задания уже решены!', 'success');\n"
-            + "      }\n"
-            + "    }";
-    private static final String SKIP_TO =
-        "} else if (id === 'skip') {\n"
-            + "      state.coins += item.price;\n"
-            + "      toast('Ачивка не ставит знак за пропуск. Сдай задание в курсе.', 'error');\n"
-            + "      return;\n"
-            + "    }";
-    private final HttpClient http = HttpClient.newBuilder()
-        .followRedirects(HttpClient.Redirect.NORMAL)
-        .connectTimeout(Duration.ofSeconds(10))
-        .build();
-    private final CourseScanner scanner = new CourseScanner(http);
+public final class Main implements AutoCloseable {
+    private static final String HOST = "127.0.0.1";
+    private static final Set<String> APP_FILES = Set.of("/index.html", "/styles.css", "/app.js", "/icon.png", "/quest-portal.png",
+        "/buddy-ember.png", "/buddy-luna.png", "/buddy-amethyst.png", "/demo.html", "/tour.js", "/tour.css");
+    private static final Set<String> COURSE_FILES = Set.of("index.html", "game.html", "achievka.js", "python-exercises.js", "theme.css");
+    private static final int MAX_BODY = 1_048_576;
+    private static final int MAX_BACKUP = 64 * MAX_BODY;
+    private static final String SESSION_HEADER = "X-Achievka-Session";
+    private static final String PROGRESS_PATH = "/api/v1/progress";
+
+    private record Pair(String token, String courseId, Instant expires) {}
+    private final Map<String, Pair> pairs = new LinkedHashMap<>();
+    private final Map<String, Course> scanned = new LinkedHashMap<>();
+    private final CourseScanner scanner = new CourseScanner(HttpClient.newBuilder()
+        .followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(4)).build());
+    private final ExecutorService workers = Executors.newFixedThreadPool(8);
     private final AccountStore store;
     private final CourseBook catalog;
-    private final String fallbackJs;
-    private volatile Course course;
-    private volatile String scannedAt = "";
+    private final String session = AccountStore.randomKey(32);
+    private HttpServer dashboard;
+    private HttpServer courseServer;
+    private Course course;
+    private final byte[] pythonData;
+    private final Course bundled;
+    private record Scan(String key, String account, CourseLink active, CourseLink previous, String title,
+                        CourseScanner.ScanResult result, int nonce) {}
+    private Scan preview;
+    private String scannedAt = "";
 
-    public Main(AccountStore store, CourseBook catalog, String fallbackJs) {
+    Main(AccountStore store, CourseBook catalog, String fallbackJs) throws CourseScanner.ScanException {
         this.store = store;
         this.catalog = catalog;
-        this.fallbackJs = fallbackJs;
+        bundled = CourseScanner.parse(fallbackJs, false, "Встроенная версия курса");
+        pythonData = fallbackJs.getBytes(StandardCharsets.UTF_8);
     }
 
     public static void main(String[] args) throws Exception {
-        Path root = Path.of(System.getProperty("user.home"), "Achievka");
-        Path accounts = root.resolve("accounts.json");
-        Path legacy = Path.of("").toAbsolutePath().resolve("data").resolve("accounts.json");
-        if (!Files.exists(accounts) && Files.exists(legacy)) {
-            Files.createDirectories(root);
-            Files.copy(legacy, accounts);
+        for (String argument : args) {
+            if (argument.startsWith("--profile=")) {
+                String profile = argument.substring("--profile=".length());
+                if (!profile.isBlank()) System.setProperty("achievka.profile", profile);
+            }
         }
-        String fallback = readFallback();
-        AccountStore store = new AccountStore(accounts);
-        CourseBook catalog = new CourseBook(root.resolve("courses.json"));
-        for (Account account : store.all()) {
-            catalog.rememberAccount(account);
+        Path root = Path.of(System.getProperty("achievka.profile",
+            Path.of(System.getProperty("user.home"), "Achievka").toString()));
+        Files.createDirectories(root);
+        try (var channel = FileChannel.open(root.resolve("app.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+             var lock = channel.tryLock()) {
+            if (lock == null) throw new IOException("Ачивка уже запущена с этим профилем");
+            Path accounts = root.resolve("accounts.json");
+            Path legacy = Path.of("data", "accounts.json");
+            if (!Files.exists(accounts) && Files.exists(legacy)) Files.copy(legacy, accounts);
+            byte[] fallback = resource("course-site/course-data.js");
+            if (fallback == null) throw new IOException("В сборке нет данных курса");
+            try (var app = new Main(new AccountStore(accounts), new CourseBook(root.resolve("courses.json")),
+                new String(fallback, StandardCharsets.UTF_8))) {
+                for (Account account : app.store.all()) app.catalog.migrate(account);
+                app.initialCourse();
+                app.start();
+                app.arm();
+                AppWindow.dashboardUrl = app.launchUrl();
+                System.out.println("Ачивка запущена");
+                Application.launch(AppWindow.class, args);
+            }
         }
-        Main app = new Main(store, catalog, fallback);
-        app.syncActiveProgress();
-        app.rescan();
-        int port = app.serve();
-        AppWindow.port = port;
-        Notifier.arm(app.course, store.active().solved());
-        System.out.println("Ачивка запущена");
-        Application.launch(AppWindow.class, args);
     }
 
-    private int serve() throws IOException {
-        int port = 8741;
-        HttpServer server = null;
-        IOException last = null;
-        for (int candidate = port; candidate < port + 10; candidate++) {
+    void initialCourse() {
+        refresh();
+    }
+
+    void start() throws IOException {
+        courseServer = listen(8741, this::handleCourse);
+        dashboard = listen(8751, this::handleDashboard);
+        courseServer.start();
+        dashboard.start();
+    }
+
+    String launchUrl() {
+        return dashboardOrigin() + "/#" + session;
+    }
+
+    String courseOrigin() {
+        return origin(courseServer);
+    }
+
+    private String dashboardOrigin() {
+        return origin(dashboard);
+    }
+
+    private static String origin(HttpServer server) {
+        return "http://" + HOST + ":" + server.getAddress().getPort();
+    }
+
+    private HttpServer listen(int firstPort, com.sun.net.httpserver.HttpHandler handler) throws IOException {
+        IOException failure = null;
+        for (int port = firstPort; port < firstPort + 10; port++) {
+            HttpServer server;
             try {
-                server = HttpServer.create(new InetSocketAddress("127.0.0.1", candidate), 0);
-                port = candidate;
-                break;
+                server = HttpServer.create(new InetSocketAddress(HOST, port), 0);
             } catch (IOException e) {
-                last = e;
+                failure = e;
+                continue;
             }
+            server.createContext("/", handler);
+            server.setExecutor(workers);
+            return server;
         }
-        if (server == null) {
-            throw last == null ? new IOException("Не удалось занять порт") : last;
-        }
-        server.createContext("/", this::handle);
-        server.setExecutor(Executors.newFixedThreadPool(8));
-        server.start();
-        return port;
+        throw new IOException("Нет свободного порта рядом с " + firstPort, failure);
     }
 
-    private void handle(HttpExchange exchange) throws IOException {
+    @Override
+    public void close() {
+        if (dashboard != null) dashboard.stop(0);
+        if (courseServer != null) courseServer.stop(0);
+        workers.shutdownNow();
+    }
+
+    private void handleDashboard(HttpExchange exchange) throws IOException {
         try {
-            String method = exchange.getRequestMethod();
+            if (!validHost(exchange, dashboardOrigin())) {
+                error(exchange, 403, "Доступ запрещён");
+                return;
+            }
             String path = exchange.getRequestURI().getPath();
-            cors(exchange);
-            if ("OPTIONS".equals(method)) {
-                exchange.sendResponseHeaders(204, -1);
-                return;
-            }
-            if ("/api/state".equals(path) && "GET".equals(method)) {
-                send(exchange, 200, "application/json; charset=utf-8", stateJson().getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            if ("/api/register".equals(path) && "POST".equals(method)) {
-                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                Account account = store.register(jsonString(body, "name"), jsonString(body, "token"));
-                send(exchange, 200, "application/json; charset=utf-8", accountJson(account, true).getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            if ("/api/login".equals(path) && "POST".equals(method)) {
-                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                Account account = store.enter(jsonString(body, "name"), jsonString(body, "token"));
-                if (account == null) {
-                    send(exchange, 400, "application/json; charset=utf-8",
-                        "{\"ok\":false,\"error\":\"Ключ должен начинаться с ach_\"}".getBytes(StandardCharsets.UTF_8));
+            if (path.startsWith("/api/")) {
+                String supplied = exchange.getRequestHeaders().getFirst(SESSION_HEADER);
+                String origin = exchange.getRequestHeaders().getFirst("Origin");
+                if (!session.equals(supplied) || (origin != null && !dashboardOrigin().equals(origin))) {
+                    error(exchange, 403, "Открой приложение Ачивка");
                     return;
                 }
-                catalog.rememberAccount(account);
-                syncActiveProgress();
-                Notifier.arm(course, store.active().solved());
-                send(exchange, 200, "application/json; charset=utf-8", stateJson().getBytes(StandardCharsets.UTF_8));
+                if ("POST".equals(exchange.getRequestMethod()) && (path.equals("/api/scan/preview")
+                    || path.equals("/api/courses") || path.equals("/api/rescan"))) scan(exchange, path);
+                else management(exchange, path);
                 return;
             }
-            if ("/api/logout".equals(path) && "POST".equals(method)) {
-                store.clearActive();
-                Notifier.arm(course, List.of());
-                send(exchange, 200, "application/json; charset=utf-8", stateJson().getBytes(StandardCharsets.UTF_8));
+            if ("GET".equals(exchange.getRequestMethod()) && "/tour-data.json".equals(path)) {
+                json(exchange, 200, Demo.data(bundled));
                 return;
             }
-            if ("/api/accounts".equals(path) && "GET".equals(method)) {
-                List<String> items = new java.util.ArrayList<>();
-                for (Account account : store.all()) {
-                    items.add(Json.obj("name", Json.str(account.name()), "token", Json.str(account.token())));
-                }
-                send(exchange, 200, "application/json; charset=utf-8",
-                    Json.obj("accounts", Json.arr(items)).getBytes(StandardCharsets.UTF_8));
+            boolean demo = "/demo.html".equals(path);
+            if ("/".equals(path)) path = "/index.html";
+            if (!"GET".equals(exchange.getRequestMethod()) || !APP_FILES.contains(path)) {
+                error(exchange, 404, "Страница не найдена");
                 return;
             }
-            if ("/api/v1/progress".equals(path) && "POST".equals(method)) {
-                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                String token = bearer(exchange);
-                if (token.isBlank()) {
-                    token = jsonString(body, "token");
-                }
-                Account account = store.find(token);
-                if (!account.connected()) {
-                    send(exchange, 401, "application/json; charset=utf-8", "{\"ok\":false}".getBytes(StandardCharsets.UTF_8));
-                    return;
-                }
-                String courseId = query(exchange, "course");
-                if (courseId.isBlank() || catalog.find(courseId) == null) {
-                    courseId = catalog.active().id();
-                }
-                List<Integer> solved = courseId.equals(catalog.active().id())
-                    ? Engine.sanitize(course, Json.solvedArray(body))
-                    : Json.solvedArray(body);
-                int nonce = catalog.progress(token, courseId).nonce();
-                if (nonce == 0) {
-                    nonce = account.resetNonce();
-                }
-                catalog.saveProgress(token, courseId, solved, nonce);
-                if (courseId.equals(catalog.active().id()) && token.equals(store.active().token())) {
-                    account = store.setProgress(token, solved, account.resetNonce());
-                    Notifier.changed(course, account.solved());
-                }
-                send(exchange, 200, "application/json; charset=utf-8", accountJson(account, true).getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            if ("/api/rescan".equals(path) && "POST".equals(method)) {
-                rescanFresh();
-                send(exchange, 200, "application/json; charset=utf-8", stateJson().getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            if ("/api/courses/select".equals(path) && "POST".equals(method)) {
-                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                if (!catalog.select(jsonString(body, "id"))) {
-                    send(exchange, 404, "application/json; charset=utf-8",
-                        "{\"ok\":false,\"error\":\"Такого курса нет\"}".getBytes(StandardCharsets.UTF_8));
-                    return;
-                }
-                syncActiveProgress();
-                rescan();
-                Notifier.arm(course, store.active().solved());
-                send(exchange, 200, "application/json; charset=utf-8", stateJson().getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            if ("/api/courses/remove".equals(path) && "POST".equals(method)) {
-                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                if (!catalog.remove(jsonString(body, "id"))) {
-                    send(exchange, 400, "application/json; charset=utf-8",
-                        "{\"ok\":false,\"error\":\"Последний курс убирать нельзя\"}".getBytes(StandardCharsets.UTF_8));
-                    return;
-                }
-                syncActiveProgress();
-                rescan();
-                Notifier.arm(course, store.active().solved());
-                send(exchange, 200, "application/json; charset=utf-8", stateJson().getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            if ("/api/courses".equals(path) && "POST".equals(method)) {
-                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                try {
-                    addCourse(jsonString(body, "url"), jsonString(body, "title"));
-                } catch (CourseScanner.ScanException e) {
-                    send(exchange, 400, "application/json; charset=utf-8",
-                        ("{\"ok\":false,\"error\":" + Json.str(e.getMessage()) + "}").getBytes(StandardCharsets.UTF_8));
-                    return;
-                }
-                send(exchange, 200, "application/json; charset=utf-8", stateJson().getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            if ("/api/reset".equals(path) && "POST".equals(method)) {
-                store.resetActive();
-                Account cleared = store.active();
-                if (cleared.connected()) {
-                    catalog.saveProgress(cleared.token(), catalog.active().id(), cleared.solved(), cleared.resetNonce());
-                }
-                Notifier.changed(course, cleared.solved());
-                send(exchange, 200, "application/json; charset=utf-8", stateJson().getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            if (path.equals("/course") || path.startsWith("/course/")) {
-                proxyCourse(exchange, path);
-                return;
-            }
-            if (!"GET".equals(method)) {
-                send(exchange, 405, "text/plain; charset=utf-8", "Метод не поддерживается".getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            String file = "/".equals(path) ? "/index.html" : path;
-            byte[] bytes = readWeb(file);
-            if (bytes == null) {
-                send(exchange, 404, "text/plain; charset=utf-8", "Нет такой страницы".getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            send(exchange, 200, contentType(file), bytes);
-        } catch (Exception e) {
-            byte[] message = ("Ошибка: " + e.getMessage()).getBytes(StandardCharsets.UTF_8);
-            send(exchange, 500, "text/plain; charset=utf-8", message);
+            exchange.getResponseHeaders().set("Content-Security-Policy",
+                "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+                + "script-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors "
+                + (demo ? "'self'" : "'none'") + "; object-src 'none'; base-uri 'none'");
+            file(exchange, path, resource(demo ? "web/index.html" : "web" + path));
+        } catch (IllegalArgumentException e) {
+            error(exchange, 400, e.getMessage());
+        } catch (RuntimeException e) {
+            e.printStackTrace();
+            error(exchange, 500, "Не удалось выполнить действие");
         } finally {
             exchange.close();
         }
     }
 
-    private void proxyCourse(HttpExchange exchange, String path) throws IOException, InterruptedException {
-        if (path.contains("..")) {
-            send(exchange, 400, "text/plain; charset=utf-8", "Плохой путь".getBytes(StandardCharsets.UTF_8));
+    private synchronized void management(HttpExchange exchange, String path) throws IOException {
+        String route = exchange.getRequestMethod() + " " + path;
+        if (route.equals("GET /api/accounts")) {
+            List<String> items = store.all().stream().map(account ->
+                Json.obj("name", Json.str(account.name()), "id", Json.str(AccountStore.profileId(account)))).toList();
+            json(exchange, 200, Json.obj("accounts", Json.arr(items)));
             return;
         }
-        String upstreamPath = path.equals("/course") || path.equals("/course/") ? "/index.html" : path.substring("/course".length());
-        if (upstreamPath.isBlank()) {
-            upstreamPath = "/index.html";
-        }
-        HttpRequest request = HttpRequest.newBuilder(URI.create(catalog.active().siteUrl()).resolve(upstreamPath.startsWith("/") ? upstreamPath.substring(1) : upstreamPath))
-            .timeout(Duration.ofSeconds(15))
-            .header("User-Agent", "Achievka/1.0")
-            .GET()
-            .build();
-        HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
-        byte[] body = response.body() == null ? new byte[0] : response.body();
-        String type = response.headers().firstValue("Content-Type").orElse("application/octet-stream");
-        if (type.startsWith("text/html")) {
-            String html = new String(body, StandardCharsets.UTF_8).replace("\r\n", "\n");
-            if (html.contains(SKIP_FROM)) {
-                html = html.replace(SKIP_FROM, SKIP_TO);
-            } else if (html.contains("state.solved.push(firstUnsolved.id);")) {
-                html = html.replace(
-                    "state.solved.push(firstUnsolved.id);",
-                    "toast('Ачивка не ставит знак за пропуск. Сдай задание в курсе.', 'error');"
-                );
-            }
-            html = html.contains("</body>")
-                ? html.replace("</body>", bridge() + "</body>")
-                : html + bridge();
-            body = html.getBytes(StandardCharsets.UTF_8);
-            type = "text/html; charset=utf-8";
-        }
-        send(exchange, response.statusCode(), type, body);
-    }
-
-    private synchronized void rescan() {
-        CourseLink link = catalog.active();
-        boolean builtin = CourseBook.PYTHON_ID.equals(link.id()) && CourseBook.PYTHON.dataUrl().equals(link.dataUrl());
-        try {
-            course = scanner.scanUrl(link.dataUrl(), builtin, fallbackJs).course();
-        } catch (CourseScanner.ScanException e) {
-            course = new Course(link.title(), "", "", List.of(), false, e.getMessage());
-        }
-        scannedAt = Instant.now().toString();
-    }
-
-    private synchronized void rescanFresh() {
-        CourseLink link = catalog.active();
-        try {
-            CourseScanner.ScanResult result = scanner.scanUrl(link.dataUrl(), false, "");
-            course = result.course();
-            scannedAt = Instant.now().toString();
-            mergeFound(result.foundDone());
-        } catch (CourseScanner.ScanException e) {
-            course = new Course(link.title(), "", "", course == null ? List.of() : course.tasks(), false, e.getMessage());
-            scannedAt = Instant.now().toString();
-        }
-    }
-
-    private void addCourse(String url, String title) throws CourseScanner.ScanException {
-        CourseScanner.ScanResult result = scanner.scanUrl(url, false, "");
-        for (CourseLink link : catalog.all()) {
-            if (link.dataUrl().equals(result.dataUrl())) {
-                catalog.select(link.id());
-                syncActiveProgress();
-                course = result.course();
-                scannedAt = Instant.now().toString();
-                Notifier.arm(course, store.active().solved());
+        if (route.equals("POST /api/login")) {
+            var body = request(exchange);
+            Account previous = store.active();
+            Account account = store.enter(optional(body, "name"), optional(body, "token"), optional(body, "profile"));
+            if (account == null) {
+                error(exchange, 400, "Проверь ключ или выбери сохранённый профиль");
                 return;
             }
+            if (!previous.token().equals(account.token())) revoke(previous.token());
+            catalog.migrate(account);
+            arm();
+            json(exchange, 200, stateJson());
+            return;
         }
-        String host = URI.create(result.siteUrl()).getHost();
-        String id = CourseBook.idFor(host, "");
-        String base = id;
-        int number = 2;
-        while (catalog.find(id) != null) {
-            id = base + "-" + number++;
-        }
-        String storageKey = "achievka_steps".equals(result.storageKey()) ? "achievka_" + id : result.storageKey();
-        String name = title == null || title.isBlank() ? result.course().title() : title.trim();
-        catalog.add(new CourseLink(id, name, result.dataUrl(), result.siteUrl(), storageKey));
-        Account account = store.active();
-        if (account.connected() && !result.foundDone().isEmpty()) {
-            catalog.saveProgress(account.token(), id, result.foundDone(), 0);
-        }
-        syncActiveProgress();
-        course = result.course();
-        scannedAt = Instant.now().toString();
-        Notifier.arm(course, store.active().solved());
-    }
-
-    private void syncActiveProgress() {
         Account account = store.active();
         if (!account.connected()) {
+            error(exchange, 401, "Войди в профиль");
             return;
         }
-        CourseBook.Progress saved = catalog.progress(account.token(), catalog.active().id());
-        store.setProgress(account.token(), saved.solved(), saved.nonce());
+        switch (route) {
+            case "GET /api/state" -> json(exchange, 200, stateJson());
+            case "POST /api/companion" -> {
+                var body = request(exchange);
+                String courseId = Json.string(body, "courseId");
+                if (!catalog.active().id().equals(courseId) || !AccountStore.profileId(account).equals(Json.string(body, "profileId"))) {
+                    error(exchange, 409, "Профиль или курс изменился. Открой награды заново.");
+                    return;
+                }
+                String id = Json.string(body, "id");
+                if (!id.isEmpty() && !Engine.companionUnlocked(Engine.evaluate(course, activeProgress().solved()), id)) {
+                    error(exchange, 400, "Этот спутник ещё закрыт.");
+                    return;
+                }
+                catalog.selectCompanion(account.token(), courseId, id);
+                json(exchange, 200, stateJson());
+            }
+            case "POST /api/logout" -> {
+                store.clearActive();
+                revoke(account.token());
+                arm();
+                json(exchange, 200, Json.obj("ok", "true"));
+            }
+            case "POST /api/scan/commit" -> {
+                var body = request(exchange);
+                if (preview == null || !preview.key().equals(Json.string(body, "key"))) {
+                    error(exchange, 409, "Открой предпросмотр заново");
+                    return;
+                }
+                commitScan(exchange, preview, Json.ids(body.get("solved")));
+            }
+            case "POST /api/courses/select" -> {
+                String id = Json.string(request(exchange), "id");
+                if (!catalog.select(id)) {
+                    error(exchange, 404, "Такого курса нет");
+                    return;
+                }
+                refresh();
+                arm();
+                json(exchange, 200, stateJson());
+            }
+            case "POST /api/courses/remove" -> {
+                String id = Json.string(request(exchange), "id");
+                String previous = catalog.active().id();
+                if (!catalog.hide(id)) {
+                    error(exchange, 400, "Последний курс убирать нельзя");
+                    return;
+                }
+                pairs.values().removeIf(pair -> pair.courseId().equals(id));
+                if (!previous.equals(catalog.active().id())) refresh();
+                arm();
+                json(exchange, 200, stateJson());
+            }
+            case "POST /api/courses/pair" -> pair(exchange, account);
+            case "POST /api/courses/import" -> {
+                var body = request(exchange);
+                CourseLink link = catalog.active();
+                if (!link.id().equals(Json.string(body, "id"))) {
+                    error(exchange, 409, "Курс изменился. Открой импорт заново");
+                    return;
+                }
+                if ((body.containsKey("profileId") && !AccountStore.profileId(account).equals(body.get("profileId")))
+                    || (body.containsKey("resetNonce") && activeProgress().nonce() != Json.nonNegativeInt(body.get("resetNonce")))
+                    || (body.containsKey("savedAt") && !link.savedAt().equals(body.get("savedAt")))) {
+                    error(exchange, 409, "Профиль или список уроков изменился. Проверь снимок ещё раз."); return;
+                }
+                List<Integer> ids = Json.ids(body.get("solved"));
+                if (ids.size() > CourseBook.MAX_STEPS) throw new IllegalArgumentException("Слишком много заданий");
+                var previous = activeProgress();
+                var merged = catalog.merge(account.token(), link.id(), previous.nonce(), knownSteps(link.id(), ids));
+                Notifier.changed(course, merged.solved());
+                json(exchange, 200, stateJson());
+            }
+            case "POST /api/reset" -> {
+                catalog.reset(account.token(), catalog.active().id());
+                arm();
+                json(exchange, 200, stateJson());
+            }
+            case "GET /api/backup" -> {
+                byte[] data = catalog.exportProgress(account.token()).getBytes(StandardCharsets.UTF_8);
+                if (data.length > MAX_BACKUP) error(exchange, 413, "Размер копии превышает 64 МБ");
+                else send(exchange, 200, "application/json; charset=utf-8", data);
+            }
+            case "POST /api/backup" -> {
+                int imported = catalog.importProgress(account.token(), request(exchange));
+                refresh();
+                arm();
+                json(exchange, 200, Json.obj("imported", Json.num(imported), "state", stateJson()));
+            }
+            default -> error(exchange, 404, "Действие не найдено");
+        }
     }
 
-    private void mergeFound(List<Integer> found) {
-        Account account = store.active();
-        if (!account.connected() || found.isEmpty()) {
+    private void pair(HttpExchange exchange, Account account) throws IOException {
+        var body = request(exchange);
+        CourseLink link = catalog.find(Json.string(body, "id"));
+        if (link == null) {
+            error(exchange, 404, "Такого курса нет");
             return;
         }
-        java.util.LinkedHashSet<Integer> ids = new java.util.LinkedHashSet<>(account.solved());
-        int before = ids.size();
-        ids.addAll(found);
-        if (ids.size() == before) {
+        if (!builtin(link)) {
+            error(exchange, 400, "Для этого курса используй импорт с сайта");
             return;
         }
-        List<Integer> merged = List.copyOf(ids);
-        catalog.saveProgress(account.token(), catalog.active().id(), merged, account.resetNonce());
-        store.setProgress(account.token(), merged, account.resetNonce());
-        Notifier.changed(course, merged);
+        String key = AccountStore.randomKey(32);
+        Instant now = Instant.now();
+        pairs.values().removeIf(pair -> !pair.expires().isAfter(now));
+        if (pairs.size() >= 256) {
+            error(exchange, 429, "Слишком много открытых подключений");
+            return;
+        }
+        pairs.put(key, new Pair(account.token(), link.id(), now.plus(Duration.ofHours(24))));
+        json(exchange, 200, Json.obj("key", Json.str(key), "profile", Json.str(AccountStore.profileId(account)),
+            "resetNonce", Json.num(catalog.progress(account.token(), link.id()).nonce())));
     }
 
-    private String bridge() {
+    private void revoke(String token) {
+        pairs.values().removeIf(pair -> pair.token().equals(token));
+    }
+
+    private void handleCourse(HttpExchange exchange) throws IOException {
+        try {
+            if (!validHost(exchange, courseOrigin())) {
+                error(exchange, 403, "Доступ запрещён");
+                return;
+            }
+            String path = exchange.getRequestURI().getPath();
+            if (PROGRESS_PATH.equals(path)) {
+                sync(exchange);
+                return;
+            }
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                error(exchange, 405, "Метод не поддерживается");
+                return;
+            }
+            if (path.equals("/course")) {
+                exchange.getResponseHeaders().set("Location", "/course/");
+                exchange.sendResponseHeaders(302, -1);
+                return;
+            }
+            if (!path.startsWith("/course/")) {
+                error(exchange, 404, "Страница не найдена");
+                return;
+            }
+            String name = path.substring("/course/".length());
+            if (name.isEmpty()) name = "index.html";
+            exchange.getResponseHeaders().set("Content-Security-Policy",
+                "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+                + "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'");
+            if (name.equals("course-data.js")) {
+                file(exchange, name, pythonData);
+            } else if (COURSE_FILES.contains(name)) {
+                file(exchange, name, resource("course-site/" + name));
+            } else {
+                error(exchange, 404, "Страница не найдена");
+            }
+        } catch (IllegalArgumentException e) {
+            error(exchange, 400, e.getMessage());
+        } catch (RuntimeException e) {
+            e.printStackTrace();
+            error(exchange, 500, "Не удалось выполнить действие");
+        } finally {
+            exchange.close();
+        }
+    }
+
+    private synchronized void sync(HttpExchange exchange) throws IOException {
+        Headers headers = exchange.getRequestHeaders();
+        String requestOrigin = headers.getFirst("Origin");
+        String method = exchange.getRequestMethod();
+        Instant now = Instant.now();
+        if (requestOrigin != null && !courseOrigin().equals(requestOrigin)) {
+            error(exchange, 403, "Источник курса не разрешён");
+            return;
+        }
+        String header = headers.getFirst("Authorization");
+        Pair pair = header != null && header.startsWith("Bearer ") ? pairs.get(header.substring(7)) : null;
+        if (pair == null || !pair.expires().isAfter(now) || catalog.find(pair.courseId()) == null) {
+            error(exchange, 401, "Подключи курс из Ачивки");
+            return;
+        }
+        CourseBook.Progress saved = catalog.progress(pair.token(), pair.courseId());
+        if ("GET".equals(method)) {
+            json(exchange, 200, CourseBook.encodeProgress(saved));
+            return;
+        }
+        if (!"POST".equals(method)) {
+            error(exchange, 405, "Метод не поддерживается");
+            return;
+        }
+        var body = request(exchange);
+        int version = Json.nonNegativeInt(body.get("resetNonce"));
+        if (version != saved.nonce()) {
+            json(exchange, 409, CourseBook.encodeProgress(saved));
+            return;
+        }
+        List<Integer> solved = Json.ids(body.get("solved"));
+        if (solved.size() > CourseBook.MAX_STEPS) throw new IllegalArgumentException("Слишком много заданий");
+        if (body.containsKey("room") && !saved.room().equals(Json.string(body,"roomBase"))) {
+            json(exchange, 409, CourseBook.encodeProgress(saved));
+            return;
+        }
+        String room = body.containsKey("room") ? CourseBook.readRoom(body) : saved.room();
+        CourseBook.Progress merged = catalog.merge(pair.token(), pair.courseId(), version, knownSteps(pair.courseId(), solved), room);
+        if (catalog.active().id().equals(pair.courseId()) && store.active().token().equals(pair.token())) {
+            Notifier.changed(course, merged.solved());
+        }
+        json(exchange, 200, CourseBook.encodeProgress(merged));
+    }
+
+    private List<Integer> knownSteps(String id, List<Integer> solved) {
+        Course candidate = scanned.get(id);
+        if (id.equals(CourseBook.PYTHON_ID)) candidate = bundled;
+        if (candidate == null || candidate.tasks().isEmpty()) throw new IllegalArgumentException("Сначала обнови список уроков");
+        return Engine.sanitize(candidate, solved);
+    }
+
+    private void refresh() {
         CourseLink link = catalog.active();
-        return "<script src=\"/achievka.js\" data-game=\"" + link.storageKey()
-            + "\" data-course=\"" + link.id() + "\"></script>\n";
+        course = builtin(link) ? bundled : link.snapshot();
+        if (course == null) course = new Course(link.title(), "", "", List.of(), false, "Обнови список уроков для офлайн-доступа.");
+        scanned.put(link.id(), course);
+        scannedAt = link.savedAt();
+    }
+
+    private void scan(HttpExchange exchange, String path) throws IOException {
+        CourseLink active;
+        Account account;
+        synchronized (this) {
+            active = catalog.active();
+            account = store.active();
+        }
+        if (!account.connected()) { error(exchange, 401, "Войди в профиль"); return; }
+        var body = path.equals("/api/rescan") ? Map.<String,Object>of() : request(exchange);
+        boolean rescan = !body.containsKey("url");
+        String address = rescan ? active.dataUrl() : Json.string(body,"url");
+        CourseScanner.ScanResult result;
+        try {
+            if ((rescan && builtin(active)) || address.equals(CourseBook.PYTHON.dataUrl()) || address.equals(CourseBook.PYTHON.siteUrl())) {
+                result = new CourseScanner.ScanResult(bundled, CourseBook.PYTHON.dataUrl(), CourseBook.PYTHON.siteUrl(),
+                    CourseBook.PYTHON.storageKey(), List.of(), "");
+            } else {
+                var fetched = scanner.scanUrl(address, false, "");
+                result = rescan ? new CourseScanner.ScanResult(fetched.course(), active.dataUrl(), active.siteUrl(),
+                    active.storageKey(), fetched.foundDone(), fetched.script()) : fetched;
+            }
+        } catch (CourseScanner.ScanException ex) {
+            error(exchange, 400, ex.getMessage());
+            return;
+        }
+        synchronized (this) {
+            if (!store.active().equals(account) || catalog.active() != active) {
+                error(exchange, 409, "Профиль или курс изменился"); return;
+            }
+            CourseLink previous = rescan ? active : catalog.byDataUrl(result.dataUrl());
+            String title = optional(body,"title").trim();
+            if (title.isEmpty()) title = previous == null ? result.course().title() : previous.title();
+            var progress = previous == null ? new CourseBook.Progress(List.of(), 0) : catalog.progress(account.token(), previous.id());
+            Scan scan = new Scan(AccountStore.randomKey(16), account.token(), active, previous, title, result, progress.nonce());
+            if (!path.equals("/api/scan/preview")) { commitScan(exchange, scan, List.of()); return; }
+            preview = scan;
+            List<String> rows = new ArrayList<>();
+            Course before = previous == null ? null : previous.snapshot();
+            var tasks = result.course().tasks();
+            for (int i = 0; i < tasks.size(); i++) {
+                var t = tasks.get(i);
+                Task old = before == null ? null : before.byId(t.id());
+                boolean changed = before != null && (old == null || !old.equals(t) || before.tasks().indexOf(old) != i);
+                boolean legacy = result.script().isEmpty() && previous != null && !builtin(previous) && t.id() >= 65536
+                    && progress.solved().contains(i + 1);
+                rows.add(Json.obj("id", Json.num(t.id()), "title", Json.str(t.title()), "changed", Json.bool(changed),
+                    "legacy", Json.bool(legacy), "saved", Json.bool(progress.solved().contains(t.id())),
+                    "found", Json.bool(result.foundDone().contains(t.id()))));
+            }
+            var removed = before == null ? List.<String>of() : before.tasks().stream()
+                .filter(t -> result.course().byId(t.id()) == null).map(t -> Json.str(t.title())).toList();
+            json(exchange, 200, Json.obj("key", Json.str(scan.key()), "title", Json.str(title), "tasks", Json.arr(rows),
+                "removed", Json.arr(removed), "reset", Json.bool(progress.nonce() > 0)));
+        }
+    }
+
+    private void commitScan(HttpExchange exchange, Scan scan, List<Integer> checked) throws IOException {
+        CourseLink previous = scan.previous();
+        if (!scan.account().equals(store.active().token()) || scan.active() != catalog.active()
+            || (previous != null && catalog.progress(scan.account(), previous.id()).nonce() != scan.nonce())) {
+            error(exchange, 409, "Прогресс изменился. Обнови предпросмотр."); return;
+        }
+        var result = scan.result();
+        var accepted = Engine.sanitize(result.course(), checked);
+        if (accepted.size() != checked.size()) { error(exchange, 400, "Список уроков изменился"); return; }
+        String dataUrl = previous == null ? result.dataUrl() : previous.dataUrl();
+        if (dataUrl.equals(CourseBook.PYTHON.dataUrl())) {
+            catalog.add(scan.title(), dataUrl, CourseBook.PYTHON.siteUrl(), CourseBook.PYTHON.storageKey(),
+                null, scan.account(), List.of());
+        } else {
+            catalog.add(scan.title(), dataUrl, result.siteUrl(), result.storageKey(), result.course(), scan.account(), accepted);
+        }
+        preview = null;
+        refresh();
+        arm();
+        json(exchange, 200, stateJson());
+    }
+
+    private static boolean builtin(CourseLink link) {
+        return CourseBook.PYTHON_ID.equals(link.id()) && CourseBook.PYTHON.dataUrl().equals(link.dataUrl());
+    }
+
+    private void arm() {
+        Notifier.arm(course, activeProgress().solved());
+    }
+
+    private CourseBook.Progress activeProgress() {
+        return catalog.progress(store.active().token(), catalog.active().id());
     }
 
     private String stateJson() {
-        Course current = course;
+        CourseLink link = catalog.active();
         Account account = store.active();
-        Engine.Snapshot snap = Engine.evaluate(current, account.solved());
+        var progress = activeProgress();
+        List<Integer> solved = Engine.sanitize(course, progress.solved());
+        Engine.Snapshot snap = Engine.evaluate(course, solved);
         String next = "null";
         if (snap.nextStep() != null) {
             Task step = snap.nextStep();
-            next = Json.obj(
-                "id", Json.num(step.id()),
-                "module", Json.str(step.module()),
-                "title", Json.str(step.title()),
-                "type", Json.str(step.typeLabel()),
-                "reward", Json.num(step.reward()),
-                "condition", Json.str("Сдать задание " + step.id() + ": " + Engine.sentence(step.title()))
-            );
+            next = Json.obj("id", Json.num(step.id()), "module", Json.str(step.module()),
+                "title", Json.str(step.title()), "type", Json.str(step.typeLabel()), "reward", Json.num(step.reward()),
+                "condition", Json.str("Сдать задание «" + step.title() + "»."));
         }
-        List<String> tasks = new java.util.ArrayList<>();
-        for (Task task : current.tasks()) {
-            tasks.add(Json.obj(
-                "id", Json.num(task.id()),
-                "module", Json.str(task.module()),
-                "title", Json.str(task.title()),
-                "type", Json.str(task.typeLabel()),
-                "reward", Json.num(task.reward()),
-                "done", Json.bool(account.solved().contains(task.id()))
-            ));
+        List<String> tasks = new ArrayList<>();
+        for (Task task : course.tasks()) {
+            tasks.add(Json.obj("id", Json.num(task.id()), "module", Json.str(task.module()),
+                "title", Json.str(task.title()), "type", Json.str(task.typeLabel()), "reward", Json.num(task.reward()),
+                "done", Json.bool(solved.contains(task.id()))));
         }
         return Json.obj(
-            "courseTitle", Json.str(current.title()),
-            "version", Json.str(current.version()),
-            "updated", Json.str(current.updated()),
-            "live", Json.bool(current.live()),
-            "sourceNote", Json.str(current.sourceNote()),
-            "sourceUrl", Json.str(catalog.active().dataUrl()),
-            "siteUrl", Json.str(catalog.active().siteUrl()),
-            "courseId", Json.str(catalog.active().id()),
-            "storageKey", Json.str(catalog.active().storageKey()),
-            "courses", coursesJson(),
+            "courseTitle", Json.str(link.title()),
+            "version", Json.str(course.version()),
+            "updated", Json.str(course.updated()),
+            "live", Json.bool(course.live()),
+            "sourceNote", Json.str(course.sourceNote()),
+            "sourceUrl", Json.str(link.dataUrl()),
+            "siteUrl", Json.str(link.siteUrl()),
+            "courseUrl", Json.str(builtin(link) ? courseOrigin() + "/course/" : link.siteUrl()),
+            "builtIn", Json.bool(builtin(link)),
+            "courseId", Json.str(link.id()),
+            "storageKey", Json.str(link.storageKey()),
+            "courses", coursesJson(link.id()),
             "scannedAt", Json.str(scannedAt),
-            "taskCount", Json.num(current.tasks().size()),
+            "taskCount", Json.num(course.tasks().size()),
             "xp", Json.num(snap.xp()),
             "xpMax", Json.num(snap.xpMax()),
             "levelName", Json.str(snap.levelName()),
             "levelFrom", Json.num(snap.levelFrom()),
             "nextAt", Json.num(snap.nextAt()),
-            "nextLevelName", snap.nextLevelName() == null ? "null" : Json.str(snap.nextLevelName()),
-            "solvedCount", Json.num(account.solved().size()),
+            "nextLevelName", Json.str(snap.nextLevelName()),
+            "solvedCount", Json.num(solved.size()), "resetNonce", Json.num(progress.nonce()),
             "studentName", Json.str(account.name()),
             "apiToken", Json.str(account.token()),
+            "profileId", Json.str(AccountStore.profileId(account)),
             "connected", Json.bool(account.connected()),
             "next", next,
             "achievements", Json.marks(snap.achievements()),
             "rewards", Json.marks(snap.rewards()),
+            "companion", Json.str(Engine.companionUnlocked(snap, progress.companion()) ? progress.companion() : ""),
             "tasks", Json.arr(tasks),
             "summary", Json.str(snap.summary()),
-            "courseOpen", Json.bool(done(snap, "course-done")),
-            "note", Json.str("Общего рейтинга нет. Опыт — сумма наград за сданные задания этого курса, без удвоения за знак.")
+            "courseOpen", Json.bool(snap.achievements().stream().anyMatch(mark -> mark.id().equals("course-done") && mark.done())),
+            "note", Json.str("Опыт — сумма наград за сданные задания этого курса.")
         );
     }
 
-    private static boolean done(Engine.Snapshot snap, String id) {
-        for (Mark mark : snap.achievements()) {
-            if (mark.id().equals(id) && mark.done()) {
-                return true;
-            }
-        }
-        return false;
+    private String coursesJson(String activeId) {
+        return Json.arr(catalog.all().stream().map(link -> Json.obj("id", Json.str(link.id()),
+            "title", Json.str(link.title()), "siteUrl", Json.str(link.siteUrl()), "dataUrl", Json.str(link.dataUrl()),
+            "active", Json.bool(link.id().equals(activeId)))).toList());
     }
 
-    private static byte[] readWeb(String file) throws IOException {
-        if (file.contains("..")) {
-            return null;
-        }
-        String name = file.startsWith("/") ? file.substring(1) : file;
-        InputStream stream = Main.class.getResourceAsStream("/web/" + name);
-        if (stream != null) {
-            try (stream) {
-                return stream.readAllBytes();
-            }
-        }
-        Path local = Path.of("web").resolve(name);
-        if (Files.exists(local)) {
-            return Files.readAllBytes(local);
-        }
-        return null;
+    private static String optional(Map<String, Object> data, String key) {
+        return data.containsKey(key) ? Json.string(data, key) : "";
     }
 
-    private static String readFallback() throws IOException {
-        byte[] bytes = readWeb("/fallback-course.js");
-        return bytes == null ? "" : new String(bytes, StandardCharsets.UTF_8);
+    private static Map<String, Object> request(HttpExchange exchange) throws IOException {
+        String type = exchange.getRequestHeaders().getFirst("Content-Type");
+        if (type == null || !type.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) {
+            throw new IllegalArgumentException("Ожидается application/json");
+        }
+        int limit = exchange.getRequestURI().getPath().equals("/api/backup") ? MAX_BACKUP : MAX_BODY;
+        byte[] body = exchange.getRequestBody().readNBytes(limit + 1);
+        if (body.length > limit) throw new IllegalArgumentException("Превышен лимит размера запроса");
+        return Json.parseObject(new String(body, StandardCharsets.UTF_8));
     }
 
-    private static String contentType(String file) {
-        if (file.endsWith(".css")) {
-            return "text/css; charset=utf-8";
-        }
-        if (file.endsWith(".js")) {
-            return "text/javascript; charset=utf-8";
-        }
-        return "text/html; charset=utf-8";
+    private static boolean validHost(HttpExchange exchange, String origin) {
+        return origin.substring("http://".length()).equals(exchange.getRequestHeaders().getFirst("Host"));
     }
 
-    private static void cors(HttpExchange exchange) {
-        Headers headers = exchange.getResponseHeaders();
-        String origin = exchange.getRequestHeaders().getFirst("Origin");
-        headers.set("Access-Control-Allow-Origin", origin == null || origin.isBlank() ? "*" : origin);
-        headers.set("Vary", "Origin");
-        headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
-        headers.set("Access-Control-Allow-Private-Network", "true");
+    private static byte[] resource(String name) throws IOException {
+        try (InputStream stream = Main.class.getResourceAsStream("/" + name)) {
+            if (stream != null) return stream.readAllBytes();
+        }
+        Path local = Path.of(name);
+        return Files.isRegularFile(local) ? Files.readAllBytes(local) : null;
     }
 
-    private static String bearer(HttpExchange exchange) {
-        String header = exchange.getRequestHeaders().getFirst("Authorization");
-        if (header == null) {
-            return "";
+    private static void file(HttpExchange exchange, String name, byte[] body) throws IOException {
+        if (body == null) {
+            error(exchange, 404, "Страница не найдена");
+            return;
         }
-        String value = header.trim();
-        if (value.regionMatches(true, 0, "Bearer ", 0, 7)) {
-            return value.substring(7).trim();
-        }
-        return value;
+        String type = name.endsWith(".js") ? "text/javascript; charset=utf-8"
+            : name.endsWith(".css") ? "text/css; charset=utf-8"
+            : name.endsWith(".png") ? "image/png" : "text/html; charset=utf-8";
+        send(exchange, 200, type, body);
     }
 
-    private String coursesJson() {
-        List<String> items = new java.util.ArrayList<>();
-        String active = catalog.active().id();
-        for (CourseLink link : catalog.all()) {
-            items.add(Json.obj(
-                "id", Json.str(link.id()),
-                "title", Json.str(link.title()),
-                "siteUrl", Json.str(link.siteUrl()),
-                "dataUrl", Json.str(link.dataUrl()),
-                "active", Json.bool(link.id().equals(active))
-            ));
-        }
-        return Json.arr(items);
+    private static void error(HttpExchange exchange, int status, String message) throws IOException {
+        json(exchange, status, Json.obj("error", Json.str(message)));
     }
 
-    private static String query(HttpExchange exchange, String name) {
-        String raw = exchange.getRequestURI().getQuery();
-        if (raw == null || raw.isBlank()) {
-            return "";
-        }
-        for (String part : raw.split("&")) {
-            int eq = part.indexOf('=');
-            if (eq > 0 && part.substring(0, eq).equals(name)) {
-                return java.net.URLDecoder.decode(part.substring(eq + 1), StandardCharsets.UTF_8);
-            }
-        }
-        return "";
-    }
-
-    private static String jsonString(String json, String field) {
-        String key = "\"" + field + "\"";
-        int at = json.indexOf(key);
-        if (at < 0) {
-            return "";
-        }
-        int colon = json.indexOf(':', at + key.length());
-        if (colon < 0) {
-            return "";
-        }
-        int quote = json.indexOf('"', colon + 1);
-        if (quote < 0) {
-            return "";
-        }
-        StringBuilder out = new StringBuilder();
-        for (int i = quote + 1; i < json.length(); i++) {
-            char current = json.charAt(i);
-            if (current == '\\' && i + 1 < json.length()) {
-                out.append(json.charAt(i + 1));
-                i++;
-                continue;
-            }
-            if (current == '"') {
-                break;
-            }
-            out.append(current);
-        }
-        return out.toString().trim();
-    }
-
-    private static String accountJson(Account account, boolean ok) {
-        return Json.obj(
-            "ok", Json.bool(ok),
-            "token", Json.str(account.token()),
-            "name", Json.str(account.name()),
-            "resetNonce", Json.num(account.resetNonce())
-        );
+    private static void json(HttpExchange exchange, int status, String body) throws IOException {
+        send(exchange, status, "application/json; charset=utf-8", body.getBytes(StandardCharsets.UTF_8));
     }
 
     private static void send(HttpExchange exchange, int status, String type, byte[] body) throws IOException {
-        cors(exchange);
-        exchange.getResponseHeaders().set("Content-Type", type);
-        exchange.getResponseHeaders().set("Cache-Control", "no-store");
+        Headers headers = exchange.getResponseHeaders();
+        headers.set("Content-Type", type);
+        headers.set("Cache-Control", "no-store");
+        headers.set("X-Content-Type-Options", "nosniff");
+        headers.set("Referrer-Policy", "no-referrer");
         exchange.sendResponseHeaders(status, body.length);
-        try (OutputStream out = exchange.getResponseBody()) {
+        try (var out = exchange.getResponseBody()) {
             out.write(body);
         }
     }

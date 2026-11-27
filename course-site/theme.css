@@ -1,0 +1,48 @@
+:root {
+  color-scheme: dark;
+  --game-bg: #100e17; --game-surface: #191623; --game-raised: #261f34;
+  --game-border: #3b304a; --game-text: #f6f1ff; --game-muted: #b7a9c8;
+  --game-accent: #caabff; --game-button: #c4a2ff; --game-ink: #211336;
+  --game-green: #c1ee91; --game-green-bg: #25352c; --game-red: #ffb9c8; --game-red-bg: #412736;
+}
+:root[data-theme=light] {
+  color-scheme: light;
+  --game-bg: #f5f0fb; --game-surface: #fff; --game-raised: #f1eaf9;
+  --game-border: #ded2eb; --game-text: #281a37; --game-muted: #625170;
+  --game-accent: #6634a2; --game-button: #7745bd; --game-ink: #fff;
+  --game-green: #265e2f; --game-green-bg: #e5f2e0; --game-red: #92213b; --game-red-bg: #fce7ec;
+}
+body.lesson-page, body.game-page { background: var(--game-bg); color: var(--game-text); }
+body header { background: var(--game-surface); color: var(--game-text); border-bottom: 1px solid var(--game-border); padding: 13px 24px; }
+.logo { letter-spacing: -.3px; }
+.sync-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: var(--game-raised); color: var(--game-accent); padding: 7px 24px; font-size: 12px; font-weight: 650; }
+.sync-bar button { color: var(--game-text); background: var(--game-surface); border: 1px solid var(--game-border); padding: 4px 8px; border-radius: 6px; cursor: pointer; }
+.mini-link, .game-page .nav-btn { color: var(--game-accent); border: 1px solid var(--game-border); background: var(--game-raised); border-radius: 9px; padding: 6px 10px; text-decoration: none; font-weight: 650; font-size: 13px; }
+.lesson-page .progress-card, .lesson-page .task, .game-page .hero-room, .game-page .shop-item, .game-page .inv-item, .game-page .task-progress-item {
+  background: var(--game-surface); border: 1px solid var(--game-border); box-shadow: none; color: var(--game-text);
+}
+.lesson-page .content-inner { background:var(--game-surface); color:var(--game-text); }
+.lesson-page .question strong { color:var(--game-accent); }
+.lesson-page .progress-card { background: linear-gradient(118deg, var(--game-raised),var(--game-surface)); }
+.lesson-page .stats, .lesson-page .task-meta, .lesson-page .arrow, .lesson-page .empty, .game-page .status { color: var(--game-muted); }
+.lesson-page .stats b, .game-page .character-name { color: var(--game-accent); }
+.lesson-page .progress-bar, .lesson-page .status-icon, .lesson-page .badge, .lesson-page .code-hint,
+.lesson-page .filter-btn, .game-page .tab { background: var(--game-raised); border-color: var(--game-border); color: var(--game-muted); }
+.lesson-page .progress-fill, .game-page .xp-fill { background: linear-gradient(90deg, #9360ee,#c9a5ff); }
+.lesson-page .task { scroll-margin-top: 76px; }
+.lesson-page .task.open { border-color: var(--game-accent); }
+.lesson-page .task-header:hover { background: var(--game-raised); }
+.lesson-page .option, .lesson-page .input-answer, .lesson-page .code-editor { color: var(--game-text); border-color: var(--game-border); background: var(--game-raised); }
+.lesson-page .option.selected { border-color: var(--game-accent); color: var(--game-accent); }
+.lesson-page .filter-btn.active, .lesson-page .btn-check, .game-page .tab.active { background: var(--game-button); color: var(--game-ink); border-color: var(--game-button); }
+.lesson-page .btn-check:disabled { opacity: .55; }
+.lesson-page .task.done .status-icon, .lesson-page .result.success, .lesson-page .option.correct { background: var(--game-green-bg); color: var(--game-green); }
+.lesson-page .result.error, .lesson-page .option.wrong { background: var(--game-red-bg); color: var(--game-red); }
+.lesson-page .btn-reset-task, .game-page .hero-stat { background: var(--game-raised); border-color: var(--game-border); color: var(--game-text); }
+.game-page .value.white, .game-page .item-name, .game-page .section-title { color: var(--game-text); }
+.game-page .hero-stat .label, .game-page .item-desc { color: var(--game-muted); }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--game-accent); outline-offset: 2px; }
+@media(max-width: 700px) {
+  .game-page .hero-room { grid-template-columns: 1fr; padding: 18px; gap: 13px; }
+  body header { padding: 10px 12px; }
+}
